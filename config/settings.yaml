@@ -1,0 +1,20 @@
+reservoir:
+  window_size: 100
+
+threat_index:
+  tier_normal_max: 35        # 0-35   -> full response
+  tier_elevated_max: 70      # 36-70  -> rounded confidence
+                              # 71-100 -> label-only + watermark eligible
+
+rate_limit:
+  requests_per_window: 40
+  window_seconds: 30
+
+watermark:
+  flip_rate_elevated: 0.15   # applied at suspicion 36-70
+  flip_rate_critical: 0.45   # applied at suspicion 71-100
+  secret_salt_env_var: SECRET_SALT   # actual secret lives in .env, this just names the var
+
+model:
+  n_features: 10
+  random_state: 42

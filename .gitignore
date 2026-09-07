@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+.env
+*.egg-info/
+.pytest_cache/
+artifacts/target/*.joblib
+artifacts/reference/*.joblib
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+.DS_Store
+*.log
