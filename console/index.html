@@ -3,16 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ModelVault — Live Defense Console</title>
+<title>ModelVault — Defense Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<div class="bg-grid"></div>
-<div class="bg-aurora"></div>
 <div id="flash-overlay"></div>
 
 <div class="shell">
@@ -21,145 +19,102 @@
   <header class="topbar">
     <div class="brand">
       <svg class="brand-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M12 2L4 5V11C4 16.5 7.4 21.3 12 22.5C16.6 21.3 20 16.5 20 11V5L12 2Z" stroke="url(#shieldGrad)" stroke-width="1.6" stroke-linejoin="round"/>
-        <path d="M9 12.2L11 14.2L15.5 9.5" stroke="url(#shieldGrad)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-        <defs>
-          <linearGradient id="shieldGrad" x1="4" y1="2" x2="20" y2="22" gradientUnits="userSpaceOnUse">
-            <stop stop-color="#22d3ee"/>
-            <stop offset="1" stop-color="#818cf8"/>
-          </linearGradient>
-        </defs>
+        <path d="M12 2L4 5V11C4 16.5 7.4 21.3 12 22.5C16.6 21.3 20 16.5 20 11V5L12 2Z" stroke="#5b8def" stroke-width="1.7" stroke-linejoin="round"/>
+        <path d="M9 12.2L11 14.2L15.5 9.5" stroke="#5b8def" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
-      <div>
-        <div class="brand-title">MODELVAULT</div>
-        <div class="brand-sub">AI Model Extraction Defense — Live Console</div>
-      </div>
+      <span class="brand-title">ModelVault</span>
+      <span class="brand-divider">/</span>
+      <span class="brand-sub">Defense Console</span>
     </div>
 
     <div class="topbar-right">
-      <div class="target-chip" title="The model this gateway is protecting">
-        <span class="dot dot-static"></span>
-        Protecting: <strong>Fraud Classifier</strong> · RandomForest · 284K tx
-      </div>
+      <div class="target-chip">Protecting <strong>Fraud Classifier</strong> (RandomForest, 284K tx)</div>
       <div class="clock" id="clock">--:--:--</div>
-      <div class="status-pill" id="status-pill">
-        <span class="pulse-dot"></span>
-        <span id="status-text">CONNECTING</span>
+      <div class="status-pill" id="status-pill"><span class="pulse-dot"></span><span id="status-text">CONNECTING</span></div>
+      <div class="toggle-group">
+        <span class="switch-label" id="defense-label">DEFENSE</span>
+        <label class="switch">
+          <input type="checkbox" id="defense-toggle" checked>
+          <span class="slider"></span>
+        </label>
       </div>
-      <label class="switch" title="Toggle the entire defense pipeline on/off">
-        <input type="checkbox" id="defense-toggle" checked>
-        <span class="slider"></span>
-      </label>
-      <span class="switch-label" id="defense-label">DEFENSE ON</span>
     </div>
   </header>
 
-  <!-- ============ HERO ROW ============ -->
-  <section class="hero-row">
-
-    <!-- Threat Gauge -->
-    <div class="panel gauge-panel">
-      <div class="panel-title">THREAT LEVEL</div>
-      <div class="gauge-wrap">
-        <svg viewBox="0 0 200 120" class="gauge-svg">
-          <path class="gauge-track" d="M 20 100 A 80 80 0 0 1 180 100" />
-          <path class="gauge-track-glow" id="gauge-arc" d="M 20 100 A 80 80 0 0 1 180 100" />
-        </svg>
-        <div class="gauge-readout">
-          <div class="gauge-value" id="gauge-value">0</div>
-          <div class="gauge-tier" id="gauge-tier">NORMAL</div>
-        </div>
-      </div>
+  <!-- ============ STAT STRIP ============ -->
+  <section class="stat-strip">
+    <div class="stat-chip">
+      <span class="stat-value" id="kpi-requests">0</span>
+      <span class="stat-label">Requests</span>
     </div>
-
-    <!-- KPI Tiles -->
-    <div class="panel kpi-panel">
-      <div class="kpi-grid">
-        <div class="kpi-tile" style="--accent:#6366f1">
-          <div class="kpi-icon">📡</div>
-          <div class="kpi-value" id="kpi-requests">0</div>
-          <div class="kpi-label">Total Requests</div>
-        </div>
-        <div class="kpi-tile" style="--accent:#22d3ee">
-          <div class="kpi-icon">👥</div>
-          <div class="kpi-value" id="kpi-clients">0</div>
-          <div class="kpi-label">Distinct Clients</div>
-        </div>
-        <div class="kpi-tile" style="--accent:#a78bfa">
-          <div class="kpi-icon">💧</div>
-          <div class="kpi-value" id="kpi-watermarks">0</div>
-          <div class="kpi-label">Watermark Triggers</div>
-        </div>
-        <div class="kpi-tile" style="--accent:#f59e0b">
-          <div class="kpi-icon">⚠️</div>
-          <div class="kpi-value" id="kpi-suspicious">0%</div>
-          <div class="kpi-label">Suspicious Traffic</div>
-        </div>
-      </div>
+    <div class="stat-sep"></div>
+    <div class="stat-chip">
+      <span class="stat-value" id="kpi-clients">0</span>
+      <span class="stat-label">Clients</span>
     </div>
-
-    <!-- Defense Pipeline -->
-    <div class="panel pipeline-panel">
-      <div class="panel-title">DEFENSE PIPELINE — LAST REQUEST</div>
-      <div class="pipeline">
-        <div class="pipe-node" id="node-1">
-          <div class="pipe-icon">🚧</div>
-          <div class="pipe-label">Ingress</div>
-          <div class="pipe-sub">Rate Limit</div>
-        </div>
-        <div class="pipe-line" id="line-1"></div>
-        <div class="pipe-node" id="node-2">
-          <div class="pipe-icon">🔎</div>
-          <div class="pipe-label">Detection</div>
-          <div class="pipe-sub" id="node-2-sub">Threat Index</div>
-        </div>
-        <div class="pipe-line" id="line-2"></div>
-        <div class="pipe-node" id="node-3">
-          <div class="pipe-icon">🎚️</div>
-          <div class="pipe-label">Response</div>
-          <div class="pipe-sub" id="node-3-sub">—</div>
-        </div>
-        <div class="pipe-line" id="line-3"></div>
-        <div class="pipe-node" id="node-4">
-          <div class="pipe-icon">💧</div>
-          <div class="pipe-label">Watermark</div>
-          <div class="pipe-sub" id="node-4-sub">—</div>
-        </div>
-      </div>
+    <div class="stat-sep"></div>
+    <div class="stat-chip">
+      <span class="stat-value" id="kpi-blocked">0</span>
+      <span class="stat-label">Blocked · L1</span>
     </div>
-
+    <div class="stat-sep"></div>
+    <div class="stat-chip">
+      <span class="stat-value" id="kpi-watermarks">0</span>
+      <span class="stat-label">Watermarked · L4</span>
+    </div>
+    <div class="stat-sep"></div>
+    <div class="stat-chip">
+      <span class="stat-value" id="kpi-suspicious">0%</span>
+      <span class="stat-label">Suspicious</span>
+    </div>
+    <div class="stat-sep"></div>
+    <div class="stat-chip stat-chip-gauge">
+      <span class="stat-value" id="gauge-value">0</span>
+      <span class="stat-label">Threat Level · <span id="gauge-tier">NORMAL</span></span>
+      <div class="mini-gauge-track"><div class="mini-gauge-fill" id="mini-gauge-fill"></div></div>
+    </div>
   </section>
 
   <!-- ============ ALERT BANNER ============ -->
   <div id="alert-banner" class="alert-banner alert-ok">
-    <span id="alert-icon">✅</span>
+    <span id="alert-icon">●</span>
     <span id="alert-text">Waiting for traffic…</span>
   </div>
 
   <!-- ============ CHARTS ROW ============ -->
   <section class="charts-row">
     <div class="panel chart-panel-main">
-      <div class="panel-title">THREAT INDEX — LIVE TIMELINE</div>
+      <div class="panel-title">THREAT INDEX — LIVE</div>
       <canvas id="timeline-chart"></canvas>
     </div>
     <div class="panel chart-panel-side">
-      <div class="panel-title">TIER DISTRIBUTION</div>
+      <div class="panel-title">TIER MIX</div>
       <canvas id="donut-chart"></canvas>
       <div class="donut-legend" id="donut-legend"></div>
     </div>
   </section>
 
-  <!-- ============ ACTIVITY LOG ============ -->
-  <section class="panel log-panel">
-    <div class="panel-title">LIVE ACTIVITY LOG</div>
-    <div class="log-terminal" id="log-terminal">
-      <div class="log-placeholder">$ waiting for incoming requests...</div>
+  <!-- ============ REQUEST TRACE INSPECTOR ============ -->
+  <section class="panel trace-panel">
+    <div class="trace-header">
+      <div class="panel-title" style="margin:0">REQUEST TRACE — LIVE</div>
+      <div class="trace-filters" id="trace-filters">
+        <button class="filter-pill active" data-filter="all">All</button>
+        <button class="filter-pill" data-filter="normal">Normal</button>
+        <button class="filter-pill" data-filter="elevated">Elevated</button>
+        <button class="filter-pill" data-filter="critical">Critical</button>
+        <button class="filter-pill" data-filter="blocked">Blocked</button>
+      </div>
+    </div>
+    <div class="trace-columns">
+      <span>Time</span><span>Client</span><span>Verdict</span><span>Threat</span><span>Signal</span><span></span>
+    </div>
+    <div class="trace-list" id="trace-list">
+      <div class="trace-placeholder">Waiting for incoming requests…</div>
     </div>
   </section>
 
-  <footer class="footer">
-    ModelVault Gateway · <span id="footer-url"></span> · Polling every 1s
-  </footer>
+  <footer class="footer">ModelVault Gateway · <span id="footer-url"></span> · polling every 1s</footer>
 
 </div>
 

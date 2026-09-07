@@ -64,6 +64,7 @@ class AdminStatsResponse(BaseModel):
     total_requests: int
     total_clients: int
     watermark_triggers: int
+    blocked_count: int = 0
     tier_counts: dict[str, int]
     defense_enabled: bool
     recent_threat_indices: list[float]

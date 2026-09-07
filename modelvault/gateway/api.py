@@ -123,7 +123,10 @@ def predict(request: PredictRequest):
 
     # Layer 1 -- ingress velocity governor. Checked before any scaling/model
     # work so a rate-limited caller doesn't burn compute on rejected requests.
+    # Logged even when rejected -- previously a 429 left no trace at all, so
+    # the dashboard couldn't show Layer 1 doing its job.
     if not state.velocity_governor.allow(request.client_id):
+        state.record_blocked_request(request.client_id)
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     features = transform_features(np.asarray(request.features, dtype=float))[0]
@@ -135,7 +138,13 @@ def predict(request: PredictRequest):
         # dashboard visibly shows "traffic flowing, unscored" rather than
         # freezing entirely -- a flat, zero-threat line is a clearer contrast
         # against defended traffic than a stats panel that stops moving.
-        state.record_request(request.client_id, ResponseTier.NORMAL, 0.0, label=label, watermarked=False)
+        trace = {
+            "layer1": {"allowed": True},
+            "layer2": {"skipped": True, "reason": "defense disabled"},
+            "layer3": {"tier": "normal", "degradation": "none (defense disabled)"},
+            "layer4": {"triggered": False, "reason": "defense disabled"},
+        }
+        state.record_request(request.client_id, ResponseTier.NORMAL, 0.0, label=label, watermarked=False, trace=trace)
         return PredictResponse(
             tier=ResponseTier.NORMAL.value,
             label=label,
@@ -155,11 +164,15 @@ def predict(request: PredictRequest):
     probabilities = predict_proba(features)[0]
     n_classes = len(probabilities)
     response = apply_throttling(probabilities, tier)
+    original_label = response["label"]
 
+    boundary_perturbed = False
     if tier == ResponseTier.CRITICAL:
-        response["label"] = apply_boundary_perturbation(
+        perturbed_label = apply_boundary_perturbation(
             response["label"], probabilities, request.client_id, features
         )
+        boundary_perturbed = perturbed_label != response["label"]
+        response["label"] = perturbed_label
 
     # Layer 4 -- deterministic watermark decision + injection.
     watermark_decision = decide_and_apply_watermark(
@@ -170,7 +183,34 @@ def predict(request: PredictRequest):
         response["label"] = watermark_decision.final_label
         state.record_watermark_event(request.client_id, features, watermark_decision.final_label)
 
-    state.record_request(request.client_id, tier, threat_index, label=response["label"], watermarked=watermarked)
+    degradation_by_tier = {
+        ResponseTier.NORMAL: "none -- full precision probabilities",
+        ResponseTier.ELEVATED: "probabilities rounded to 1 decimal",
+        ResponseTier.CRITICAL: "label-only, no probabilities disclosed",
+    }
+    trace = {
+        "layer1": {"allowed": True},
+        "layer2": {
+            "threat_index": round(threat_index, 1),
+            "macro_feature_distortion": round(threat_result["macro_feature_distortion"], 1),
+            "micro_coverage_density": round(threat_result["micro_coverage_density"], 1),
+        },
+        "layer3": {
+            "tier": tier.value,
+            "degradation": degradation_by_tier[tier],
+            "boundary_perturbed": boundary_perturbed,
+        },
+        "layer4": {
+            "triggered": watermarked,
+            "original_label": original_label,
+            "final_label": response["label"] if watermarked else None,
+        },
+    }
+
+    state.record_request(
+        request.client_id, tier, threat_index,
+        label=response["label"], watermarked=watermarked, trace=trace,
+    )
 
     return PredictResponse(
         tier=tier.value,

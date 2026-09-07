@@ -34,10 +34,12 @@ class GatewayState:
         self.watermark_trigger_count = 0
         self.seen_clients: set[str] = set()
         self.recent_threat_indices: deque[float] = deque(maxlen=200)
-        # Per-request log for the dashboard's live activity table -- separate
-        # from recent_threat_indices (which only tracks the score) since the
-        # UI wants tier/label/watermark context per row too.
-        self.recent_events: deque[dict] = deque(maxlen=100)
+        self.blocked_count = 0
+        # Per-request log for the dashboard's live trace inspector -- each
+        # entry carries the FULL per-layer decision trail (not just the final
+        # tier), so the UI can show exactly what Layer 1-4 each did for a
+        # given request, not just its outcome.
+        self.recent_events: deque[dict] = deque(maxlen=150)
 
         # key: (client_id, query bytes) -> WatermarkEvent, used by /verify-ownership
         # to look up what label a suspect model SHOULD reproduce for a given query
@@ -64,7 +66,13 @@ class GatewayState:
         threat_index: float,
         label: int | None = None,
         watermarked: bool = False,
+        trace: dict | None = None,
     ) -> None:
+        """trace: the full per-layer decision trail for this request (rate
+        limit status, macro/micro signal breakdown, response degradation
+        applied, watermark decision) -- everything the dashboard's request
+        inspector needs to explain WHY a request got the verdict it did,
+        not just what the verdict was."""
         with self._lock:
             self.total_requests += 1
             self.seen_clients.add(client_id)
@@ -77,6 +85,27 @@ class GatewayState:
                 "threat_index": threat_index,
                 "label": label,
                 "watermarked": watermarked,
+                "blocked": False,
+                "trace": trace or {},
+            })
+
+    def record_blocked_request(self, client_id: str) -> None:
+        """Layer 1 rejected this request before it ever reached scoring --
+        logged separately so the dashboard can show Layer 1 rate-limit
+        rejections, which previously vanished with no trace at all."""
+        with self._lock:
+            self.total_requests += 1
+            self.blocked_count += 1
+            self.seen_clients.add(client_id)
+            self.recent_events.append({
+                "timestamp": time.time(),
+                "client_id": client_id,
+                "tier": "blocked",
+                "threat_index": None,
+                "label": None,
+                "watermarked": False,
+                "blocked": True,
+                "trace": {"layer1": {"allowed": False, "reason": "rate limit exceeded"}},
             })
 
     def record_watermark_event(self, client_id: str, query_features: np.ndarray, expected_label: int) -> None:
@@ -102,6 +131,7 @@ class GatewayState:
                 "total_requests": self.total_requests,
                 "total_clients": len(self.seen_clients),
                 "watermark_triggers": self.watermark_trigger_count,
+                "blocked_count": self.blocked_count,
                 "tier_counts": dict(self.tier_counts),
                 "defense_enabled": self.defense_enabled,
                 "recent_threat_indices": list(self.recent_threat_indices),

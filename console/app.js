@@ -1,25 +1,24 @@
-// ModelVault Live Console -- polls /admin/stats on the SAME origin (this
-// page is served directly by the gateway, see modelvault/gateway/api.py's
-// StaticFiles mount) and renders everything client-side. No build step, no
-// framework -- plain DOM + Chart.js, so it works offline and loads instantly.
+// ModelVault Defense Console -- polls /admin/stats on the same origin (this
+// page is served directly by the gateway) and renders everything client-side.
 
 const params = new URLSearchParams(window.location.search);
 const API_KEY = params.get('key') || '';
 const POLL_MS = 1000;
 const TIER_NORMAL_MAX = 35;
 const TIER_ELEVATED_MAX = 70;
-const TIER_COLORS = { normal: '#22c55e', elevated: '#f59e0b', critical: '#ef4444' };
+const TIER_COLORS = { normal: '#34d399', elevated: '#fbbf24', critical: '#f87171', blocked: '#8b8d98' };
 
 let lastEventTimestamp = 0;
 let lastCriticalCount = 0;
-let previousKpis = {};
+let previousValues = {};
+let expandedRows = new Set();
+let currentFilter = 'all';
+let allEvents = [];
 
 document.getElementById('footer-url').textContent = window.location.origin;
 
 // ---------------- Clock ----------------
-function tickClock() {
-  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
-}
+function tickClock() { document.getElementById('clock').textContent = new Date().toLocaleTimeString(); }
 setInterval(tickClock, 1000);
 tickClock();
 
@@ -31,9 +30,9 @@ const bandsPlugin = {
     if (!chartArea) return;
     const y = scales.y;
     const zones = [
-      [0, TIER_NORMAL_MAX, 'rgba(34,197,94,0.06)'],
-      [TIER_NORMAL_MAX, TIER_ELEVATED_MAX, 'rgba(245,158,11,0.06)'],
-      [TIER_ELEVATED_MAX, 100, 'rgba(239,68,68,0.08)'],
+      [0, TIER_NORMAL_MAX, 'rgba(52,211,153,0.05)'],
+      [TIER_NORMAL_MAX, TIER_ELEVATED_MAX, 'rgba(251,191,36,0.05)'],
+      [TIER_ELEVATED_MAX, 100, 'rgba(248,113,113,0.07)'],
     ];
     ctx.save();
     zones.forEach(([lo, hi, color]) => {
@@ -47,135 +46,62 @@ const bandsPlugin = {
 };
 
 const timelineCtx = document.getElementById('timeline-chart').getContext('2d');
-const gradient = timelineCtx.createLinearGradient(0, 0, 0, 270);
-gradient.addColorStop(0, 'rgba(34,211,238,0.35)');
-gradient.addColorStop(1, 'rgba(34,211,238,0.02)');
+const gradient = timelineCtx.createLinearGradient(0, 0, 0, 210);
+gradient.addColorStop(0, 'rgba(91,141,239,0.28)');
+gradient.addColorStop(1, 'rgba(91,141,239,0.01)');
 
 const timelineChart = new Chart(timelineCtx, {
   type: 'line',
-  data: {
-    labels: [],
-    datasets: [{
-      data: [],
-      borderColor: '#22d3ee',
-      backgroundColor: gradient,
-      fill: true,
-      tension: 0.35,
-      pointRadius: 0,
-      borderWidth: 2.5,
-    }],
-  },
+  data: { labels: [], datasets: [{ data: [], borderColor: '#5b8def', backgroundColor: gradient, fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 }] },
   options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    animation: { duration: 300 },
+    responsive: true, maintainAspectRatio: false, animation: { duration: 250 },
     plugins: { legend: { display: false }, tooltip: { intersect: false, mode: 'index' } },
     scales: {
-      y: { min: 0, max: 100, grid: { color: 'rgba(148,163,184,0.08)' }, ticks: { color: '#64748b' } },
-      x: { grid: { display: false }, ticks: { color: '#64748b', maxTicksLimit: 8 } },
+      y: { min: 0, max: 100, grid: { color: '#1a1c1f' }, ticks: { color: '#52545c', font: { size: 10 } } },
+      x: { grid: { display: false }, ticks: { color: '#52545c', maxTicksLimit: 8, font: { size: 10 } } },
     },
   },
   plugins: [bandsPlugin],
 });
 
-const donutCtx = document.getElementById('donut-chart').getContext('2d');
-const donutChart = new Chart(donutCtx, {
+const donutChart = new Chart(document.getElementById('donut-chart').getContext('2d'), {
   type: 'doughnut',
-  data: {
-    labels: ['Normal', 'Elevated', 'Critical'],
-    datasets: [{
-      data: [0, 0, 0],
-      backgroundColor: [TIER_COLORS.normal, TIER_COLORS.elevated, TIER_COLORS.critical],
-      borderWidth: 0,
-      hoverOffset: 6,
-    }],
-  },
-  options: {
-    responsive: true,
-    maintainAspectRatio: false,
-    cutout: '70%',
-    animation: { duration: 300 },
-    plugins: { legend: { display: false } },
-  },
+  data: { labels: ['Normal', 'Elevated', 'Critical'], datasets: [{ data: [0, 0, 0], backgroundColor: [TIER_COLORS.normal, TIER_COLORS.elevated, TIER_COLORS.critical], borderWidth: 0, hoverOffset: 4 }] },
+  options: { responsive: true, maintainAspectRatio: false, cutout: '72%', animation: { duration: 250 }, plugins: { legend: { display: false } } },
 });
 
 function renderDonutLegend(counts) {
   const total = (counts.normal || 0) + (counts.elevated || 0) + (counts.critical || 0);
-  const legend = document.getElementById('donut-legend');
-  legend.innerHTML = ['normal', 'elevated', 'critical'].map(tier => {
+  document.getElementById('donut-legend').innerHTML = ['normal', 'elevated', 'critical'].map(tier => {
     const pct = total ? Math.round(((counts[tier] || 0) / total) * 100) : 0;
     return `<span><span class="legend-dot" style="background:${TIER_COLORS[tier]}"></span>${tier} ${pct}%</span>`;
   }).join('');
 }
 
-// ---------------- Gauge ----------------
-const GAUGE_CIRCUMFERENCE = 251.2;
+// ---------------- Mini gauge ----------------
 function updateGauge(value) {
   const clamped = Math.max(0, Math.min(100, value));
-  const offset = GAUGE_CIRCUMFERENCE * (1 - clamped / 100);
-  const arc = document.getElementById('gauge-arc');
-  arc.style.strokeDashoffset = offset;
-
   let color, tierText;
-  if (clamped <= TIER_NORMAL_MAX) { color = '#22c55e'; tierText = 'NORMAL'; }
-  else if (clamped <= TIER_ELEVATED_MAX) { color = '#f59e0b'; tierText = 'ELEVATED'; }
-  else { color = '#ef4444'; tierText = 'CRITICAL'; }
-  arc.style.stroke = color;
-
+  if (clamped <= TIER_NORMAL_MAX) { color = TIER_COLORS.normal; tierText = 'NORMAL'; }
+  else if (clamped <= TIER_ELEVATED_MAX) { color = TIER_COLORS.elevated; tierText = 'ELEVATED'; }
+  else { color = TIER_COLORS.critical; tierText = 'CRITICAL'; }
   document.getElementById('gauge-value').textContent = Math.round(clamped);
   document.getElementById('gauge-value').style.color = color;
   document.getElementById('gauge-tier').textContent = tierText;
+  document.getElementById('gauge-tier').style.color = color;
+  const fill = document.getElementById('mini-gauge-fill');
+  fill.style.width = clamped + '%';
+  fill.style.background = color;
 }
 
-// ---------------- KPI bump animation ----------------
-function setKpi(id, value) {
+// ---------------- Stat bump ----------------
+function setStat(id, value) {
   const el = document.getElementById(id);
-  if (previousKpis[id] !== undefined && previousKpis[id] !== value) {
+  if (previousValues[id] !== undefined && previousValues[id] !== value) {
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
   }
-  previousKpis[id] = value;
+  previousValues[id] = value;
   el.textContent = value;
-}
-
-// ---------------- Pipeline flow ----------------
-function pulseNode(nodeId, color) {
-  const node = document.getElementById(nodeId);
-  node.style.setProperty('--pipe-color', color);
-  node.classList.add('active');
-  clearTimeout(node._t);
-  node._t = setTimeout(() => node.classList.remove('active'), 1400);
-}
-function pulseLine(lineId) {
-  const line = document.getElementById(lineId);
-  line.classList.remove('flow'); void line.offsetWidth; line.classList.add('flow');
-}
-
-function updatePipeline(event) {
-  if (!event) return;
-  pulseNode('node-1', '#22d3ee');
-  setTimeout(() => pulseLine('line-1'), 50);
-
-  setTimeout(() => {
-    pulseNode('node-2', '#22d3ee');
-    document.getElementById('node-2-sub').textContent = event.threat_index.toFixed(0);
-    pulseLine('line-2');
-  }, 150);
-
-  setTimeout(() => {
-    const tierColor = TIER_COLORS[event.tier] || '#6366f1';
-    pulseNode('node-3', tierColor);
-    document.getElementById('node-3-sub').textContent = event.tier;
-    pulseLine('line-3');
-  }, 300);
-
-  setTimeout(() => {
-    if (event.watermarked) {
-      pulseNode('node-4', '#facc15');
-      document.getElementById('node-4-sub').textContent = 'triggered';
-    } else {
-      document.getElementById('node-4-sub').textContent = 'clear';
-    }
-  }, 450);
 }
 
 // ---------------- Alert banner ----------------
@@ -183,59 +109,134 @@ function updateBanner(stats) {
   const counts = stats.tier_counts;
   const total = (counts.normal || 0) + (counts.elevated || 0) + (counts.critical || 0);
   const banner = document.getElementById('alert-banner');
-  const icon = document.getElementById('alert-icon');
   const text = document.getElementById('alert-text');
-
-  if (total === 0) {
-    banner.className = 'alert-banner alert-ok';
-    icon.textContent = '⏳'; text.textContent = 'Waiting for traffic…';
-    return;
-  }
+  if (total === 0) { banner.className = 'alert-banner alert-ok'; text.textContent = 'Waiting for traffic…'; return; }
   const suspiciousShare = ((counts.elevated || 0) + (counts.critical || 0)) / total;
   if (suspiciousShare > 0.5) {
     banner.className = 'alert-banner alert-critical';
-    icon.textContent = '🚨';
-    text.textContent = `HIGH ALERT — ${Math.round(suspiciousShare*100)}% of recent traffic is elevated/critical. Likely active extraction attempt.`;
+    text.textContent = `HIGH ALERT — ${Math.round(suspiciousShare*100)}% of recent traffic is elevated/critical tier. Likely active extraction attempt.`;
   } else if (suspiciousShare > 0.2) {
     banner.className = 'alert-banner alert-warning';
-    icon.textContent = '⚠️';
     text.textContent = `Elevated suspicion — ${Math.round(suspiciousShare*100)}% of recent traffic is elevated/critical tier.`;
   } else {
     banner.className = 'alert-banner alert-ok';
-    icon.textContent = '✅';
     text.textContent = `Traffic looks normal (${Math.round(suspiciousShare*100)}% elevated/critical).`;
   }
 }
 
-// ---------------- Activity log ----------------
-function appendLogLines(events) {
-  const terminal = document.getElementById('log-terminal');
-  const newest = events.filter(e => e.timestamp > lastEventTimestamp).sort((a, b) => a.timestamp - b.timestamp);
-  if (newest.length === 0) return;
-
-  const placeholder = terminal.querySelector('.log-placeholder');
-  if (placeholder) placeholder.remove();
-
-  newest.forEach(e => {
-    const line = document.createElement('div');
-    line.className = 'log-line';
-    const time = new Date(e.timestamp * 1000).toLocaleTimeString();
-    const wm = e.watermarked ? '<span class="log-wm">⭐ watermarked</span>' : '';
-    line.innerHTML = `
-      <span class="log-time">${time}</span>
-      <span class="log-client">${e.client_id}</span>
-      <span class="log-tier ${e.tier}">● ${e.tier}</span>
-      <span class="log-threat">${e.threat_index.toFixed(1)}</span>
-      ${wm}
-    `;
-    terminal.insertBefore(line, terminal.firstChild);
-  });
-  lastEventTimestamp = Math.max(...newest.map(e => e.timestamp));
-
-  while (terminal.children.length > 60) terminal.removeChild(terminal.lastChild);
+// ---------------- Trace inspector ----------------
+function signalSummary(event) {
+  if (event.blocked) return 'rejected before scoring';
+  const t = event.trace || {};
+  if (t.layer2 && t.layer2.skipped) return 'defense disabled — unscored';
+  if (t.layer2) {
+    const parts = [`macro ${t.layer2.macro_feature_distortion}`, `micro ${t.layer2.micro_coverage_density}`];
+    if (t.layer4 && t.layer4.triggered) parts.push('watermarked');
+    if (t.layer3 && t.layer3.boundary_perturbed) parts.push('boundary-flipped');
+    return parts.join(' · ');
+  }
+  return '';
 }
 
-// ---------------- Flash overlay on new critical ----------------
+function wfBar(value, color) {
+  return `<div class="wf-bar"><div class="wf-bar-fill" style="width:${Math.min(100, value)}%; background:${color}"></div></div>`;
+}
+
+function renderWaterfall(event) {
+  const t = event.trace || {};
+  const rows = [];
+
+  // Layer 1
+  if (event.blocked) {
+    rows.push(`<div class="wf-stage"><div class="wf-stage-name">L1 · Ingress</div><div class="wf-stage-body"><span class="wf-fail">✗ BLOCKED</span> — rate limit exceeded for this client</div></div>`);
+  } else {
+    rows.push(`<div class="wf-stage"><div class="wf-stage-name">L1 · Ingress</div><div class="wf-stage-body"><span class="wf-pass">✓ allowed</span> <span class="dim">within rate limit</span></div></div>`);
+  }
+
+  // Layer 2
+  if (t.layer2 && t.layer2.skipped) {
+    rows.push(`<div class="wf-stage"><div class="wf-stage-name">L2 · Detection</div><div class="wf-stage-body dim">skipped — ${t.layer2.reason}</div></div>`);
+  } else if (t.layer2) {
+    rows.push(`<div class="wf-stage"><div class="wf-stage-name">L2 · Detection</div><div class="wf-stage-body">
+      threat index <strong>${t.layer2.threat_index}</strong> = macro ${t.layer2.macro_feature_distortion} + micro ${t.layer2.micro_coverage_density}
+      ${wfBar(t.layer2.threat_index, TIER_COLORS[event.tier] || '#5b8def')}
+    </div></div>`);
+  }
+
+  // Layer 3
+  if (t.layer3) {
+    const extra = t.layer3.boundary_perturbed ? ' <span style="color:#a78bfa">· boundary-adjacent label flip applied</span>' : '';
+    rows.push(`<div class="wf-stage"><div class="wf-stage-name">L3 · Response</div><div class="wf-stage-body">tier <strong>${t.layer3.tier}</strong> — ${t.layer3.degradation}${extra}</div></div>`);
+  }
+
+  // Layer 4
+  if (t.layer4) {
+    if (t.layer4.triggered) {
+      rows.push(`<div class="wf-stage"><div class="wf-stage-name">L4 · Watermark</div><div class="wf-stage-body"><span style="color:#a78bfa">⭐ triggered</span> — label flipped ${t.layer4.original_label} → ${t.layer4.final_label}</div></div>`);
+    } else if (t.layer4.reason) {
+      rows.push(`<div class="wf-stage"><div class="wf-stage-name">L4 · Watermark</div><div class="wf-stage-body dim">not evaluated — ${t.layer4.reason}</div></div>`);
+    } else {
+      rows.push(`<div class="wf-stage"><div class="wf-stage-name">L4 · Watermark</div><div class="wf-stage-body dim">not triggered this request</div></div>`);
+    }
+  }
+
+  return `<div class="trace-waterfall">${rows.join('')}</div>`;
+}
+
+function verdictBadge(event) {
+  if (event.blocked) return `<span class="verdict-badge verdict-blocked">BLOCKED</span>`;
+  const cls = `verdict-${event.tier}`;
+  return `<span class="verdict-badge ${cls}">${event.tier.toUpperCase()}</span>`;
+}
+
+function renderTraceList() {
+  const list = document.getElementById('trace-list');
+  const filtered = currentFilter === 'all' ? allEvents : allEvents.filter(e => currentFilter === 'blocked' ? e.blocked : e.tier === currentFilter);
+
+  if (filtered.length === 0) {
+    list.innerHTML = `<div class="trace-placeholder">No ${currentFilter === 'all' ? '' : currentFilter + ' '}requests yet…</div>`;
+    return;
+  }
+
+  const scrollTop = list.scrollTop;
+  list.innerHTML = filtered.slice(0, 80).map(event => {
+    const key = String(event.timestamp);
+    const isExpanded = expandedRows.has(key);
+    const time = new Date(event.timestamp * 1000).toLocaleTimeString();
+    const wm = event.watermarked ? '<span class="wm-badge">⭐</span>' : '';
+    return `
+      <div class="trace-row ${isExpanded ? 'expanded' : ''}" data-key="${key}">
+        <div class="trace-row-main">
+          <span class="trace-time">${time}</span>
+          <span class="trace-client">${event.client_id}</span>
+          <span>${verdictBadge(event)}${wm}</span>
+          <span class="trace-threat">${event.threat_index !== null ? event.threat_index.toFixed(0) : '—'}</span>
+          <span class="trace-signal">${signalSummary(event)}</span>
+          <span class="trace-caret">▶</span>
+        </div>
+        <div class="trace-detail">${isExpanded ? renderWaterfall(event) : ''}</div>
+      </div>`;
+  }).join('');
+  list.scrollTop = scrollTop;
+
+  list.querySelectorAll('.trace-row').forEach(row => {
+    row.querySelector('.trace-row-main').addEventListener('click', () => {
+      const key = row.dataset.key;
+      if (expandedRows.has(key)) expandedRows.delete(key); else expandedRows.add(key);
+      renderTraceList();
+    });
+  });
+}
+
+document.getElementById('trace-filters').addEventListener('click', (e) => {
+  if (!e.target.classList.contains('filter-pill')) return;
+  document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+  e.target.classList.add('active');
+  currentFilter = e.target.dataset.filter;
+  renderTraceList();
+});
+
+// ---------------- Flash + status ----------------
 function maybeFlash(criticalCount) {
   if (criticalCount > lastCriticalCount) {
     const overlay = document.getElementById('flash-overlay');
@@ -243,13 +244,9 @@ function maybeFlash(criticalCount) {
   }
   lastCriticalCount = criticalCount;
 }
-
-// ---------------- Status ----------------
 function setStatus(online) {
-  const pill = document.getElementById('status-pill');
-  const text = document.getElementById('status-text');
-  pill.classList.toggle('offline', !online);
-  text.textContent = online ? 'LIVE' : 'OFFLINE';
+  document.getElementById('status-pill').classList.toggle('offline', !online);
+  document.getElementById('status-text').textContent = online ? 'LIVE' : 'OFFLINE';
 }
 
 // ---------------- Main poll loop ----------------
@@ -257,9 +254,8 @@ async function poll() {
   try {
     const res = await fetch('/admin/stats', { headers: { 'X-API-Key': API_KEY } });
     if (!res.ok) throw new Error('bad status ' + res.status);
-    const stats = await res.json();
+    render(await res.json());
     setStatus(true);
-    render(stats);
   } catch (err) {
     setStatus(false);
   }
@@ -270,10 +266,11 @@ function render(stats) {
   const total = (counts.normal || 0) + (counts.elevated || 0) + (counts.critical || 0);
   const suspiciousPct = total ? Math.round(((counts.elevated || 0) + (counts.critical || 0)) / total * 100) : 0;
 
-  setKpi('kpi-requests', stats.total_requests);
-  setKpi('kpi-clients', stats.total_clients);
-  setKpi('kpi-watermarks', stats.watermark_triggers);
-  setKpi('kpi-suspicious', suspiciousPct + '%');
+  setStat('kpi-requests', stats.total_requests);
+  setStat('kpi-clients', stats.total_clients);
+  setStat('kpi-blocked', stats.blocked_count || 0);
+  setStat('kpi-watermarks', stats.watermark_triggers);
+  setStat('kpi-suspicious', suspiciousPct + '%');
 
   const recent = stats.recent_threat_indices || [];
   updateGauge(recent.length ? recent[recent.length - 1] : 0);
@@ -288,9 +285,8 @@ function render(stats) {
 
   updateBanner(stats);
 
-  const events = stats.recent_events || [];
-  appendLogLines(events);
-  if (events.length > 0) updatePipeline(events[0]); // most recent first from the API
+  allEvents = stats.recent_events || [];
+  renderTraceList();
 
   maybeFlash(counts.critical || 0);
 
@@ -299,7 +295,6 @@ function render(stats) {
   document.getElementById('defense-label').textContent = stats.defense_enabled ? 'DEFENSE ON' : 'DEFENSE OFF';
 }
 
-// ---------------- Defense toggle ----------------
 document.getElementById('defense-toggle').addEventListener('change', async (e) => {
   try {
     await fetch('/admin/toggle-defense', {
@@ -307,7 +302,7 @@ document.getElementById('defense-toggle').addEventListener('change', async (e) =
       headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
       body: JSON.stringify({ enabled: e.target.checked }),
     });
-  } catch (err) { /* next poll will resync the toggle state */ }
+  } catch (err) { /* next poll resyncs */ }
 });
 
 poll();
