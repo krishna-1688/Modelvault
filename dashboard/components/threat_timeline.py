@@ -9,7 +9,7 @@ import streamlit as st
 NORMAL_COLOR = "#22c55e"
 ELEVATED_COLOR = "#f59e0b"
 CRITICAL_COLOR = "#ef4444"
-LINE_COLOR = "#60a5fa"
+LINE_COLOR = "#22d3ee"
 
 
 def render(recent_threat_indices: list[float], tier_normal_max: int, tier_elevated_max: int) -> None:
@@ -31,9 +31,9 @@ def render(recent_threat_indices: list[float], tier_normal_max: int, tier_elevat
     fig.add_trace(go.Scatter(
         x=x, y=y,
         mode="lines",
-        line=dict(color=LINE_COLOR, width=2, shape="spline", smoothing=0.3),
+        line=dict(color=LINE_COLOR, width=2.5, shape="spline", smoothing=0.3),
         fill="tozeroy",
-        fillcolor="rgba(96, 165, 250, 0.12)",
+        fillcolor="rgba(34, 211, 238, 0.12)",
         hovertemplate="Request #%{x}<br>Threat Index: %{y:.1f}<extra></extra>",
         name="Threat Index",
     ))
@@ -47,7 +47,7 @@ def render(recent_threat_indices: list[float], tier_normal_max: int, tier_elevat
         xaxis=dict(title="Request #", gridcolor="rgba(128,128,128,0.1)"),
         showlegend=False,
         hovermode="x unified",
-        font=dict(color="#94a3b8"),
+        font=dict(color="#94a3b8", family="Inter, sans-serif"),
     )
 
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})

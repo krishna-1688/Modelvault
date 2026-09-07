@@ -33,8 +33,8 @@ def render_donut(tier_counts: dict[str, int]) -> None:
         margin=dict(l=10, r=10, t=10, b=10),
         paper_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
-        annotations=[dict(text=f"{total}<br>total", x=0.5, y=0.5, font_size=18, showarrow=False, font=dict(color="#94a3b8"))],
-        font=dict(color="#94a3b8"),
+        annotations=[dict(text=f"{total}<br>total", x=0.5, y=0.5, font_size=18, showarrow=False, font=dict(color="#94a3b8", family="Inter, sans-serif"))],
+        font=dict(color="#94a3b8", family="Inter, sans-serif"),
     )
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
@@ -71,7 +71,7 @@ def render_scatter(recent_events: list[dict]) -> None:
         plot_bgcolor="rgba(0,0,0,0)",
         yaxis=dict(range=[0, 100], title="Threat Index", gridcolor="rgba(128,128,128,0.15)"),
         xaxis=dict(title="Most recent requests (left to right)", gridcolor="rgba(128,128,128,0.1)"),
-        font=dict(color="#94a3b8"),
+        font=dict(color="#94a3b8", family="Inter, sans-serif"),
     )
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     st.caption("⭐ star marker = watermark triggered on that request")

@@ -1,14 +1,18 @@
 """Alert banner (is traffic currently suspicious?) plus a live activity log
-table of the most recent individual requests -- the two things a SOC-style
-monitoring view always has: a headline verdict, and the raw feed to verify it against."""
+rendered as a custom HTML table with colored pill badges -- the two things a
+SOC-style monitoring view always has: a headline verdict, and the raw feed
+to verify it against."""
 from __future__ import annotations
 
 from datetime import datetime
 
-import pandas as pd
 import streamlit as st
 
-TIER_BADGE = {"normal": "🟢 normal", "elevated": "🟠 elevated", "critical": "🔴 critical"}
+TIER_PILL = {
+    "normal": '<span class="mv-pill mv-pill-normal">● normal</span>',
+    "elevated": '<span class="mv-pill mv-pill-elevated">● elevated</span>',
+    "critical": '<span class="mv-pill mv-pill-critical">● critical</span>',
+}
 
 
 def render_banner(stats: dict) -> None:
@@ -21,32 +25,64 @@ def render_banner(stats: dict) -> None:
     suspicious_share = (tier_counts.get("elevated", 0) + tier_counts.get("critical", 0)) / total
 
     if suspicious_share > 0.5:
-        st.error(f"🚨 **HIGH ALERT** -- {suspicious_share*100:.0f}% of recent traffic is elevated/critical tier. Likely active extraction attempt.")
+        st.markdown(
+            f'<div class="mv-banner mv-banner-critical">🚨 <strong>HIGH ALERT</strong> — '
+            f'{suspicious_share*100:.0f}% of recent traffic is elevated/critical tier. Likely active extraction attempt.</div>',
+            unsafe_allow_html=True,
+        )
     elif suspicious_share > 0.2:
-        st.warning(f"⚠️ **Elevated suspicion** -- {suspicious_share*100:.0f}% of recent traffic is elevated/critical tier.")
+        st.markdown(
+            f'<div class="mv-banner mv-banner-warning">⚠️ <strong>Elevated suspicion</strong> — '
+            f'{suspicious_share*100:.0f}% of recent traffic is elevated/critical tier.</div>',
+            unsafe_allow_html=True,
+        )
     else:
-        st.success(f"✅ **Traffic looks normal** ({suspicious_share*100:.0f}% elevated/critical).")
+        st.markdown(
+            f'<div class="mv-banner mv-banner-ok">✅ <strong>Traffic looks normal</strong> '
+            f'({suspicious_share*100:.0f}% elevated/critical).</div>',
+            unsafe_allow_html=True,
+        )
 
     if stats["watermark_triggers"] > 0:
-        st.info(f"💧 {stats['watermark_triggers']} watermark trigger(s) planted so far -- available for ownership verification.")
+        st.markdown(
+            f'<div class="mv-banner mv-banner-info">💧 {stats["watermark_triggers"]} watermark trigger(s) '
+            f'planted so far — available for ownership verification.</div>',
+            unsafe_allow_html=True,
+        )
 
 
-def render_activity_log(recent_events: list[dict], limit: int = 15) -> None:
+def render_activity_log(recent_events: list[dict], limit: int = 12) -> None:
     st.markdown("#### 📋 Live Activity Log")
     if not recent_events:
         st.caption("No requests logged yet.")
         return
 
-    rows = []
+    rows_html = []
     for event in recent_events[:limit]:
-        rows.append({
-            "Time": datetime.fromtimestamp(event["timestamp"]).strftime("%H:%M:%S"),
-            "Client": event["client_id"],
-            "Tier": TIER_BADGE.get(event["tier"], event["tier"]),
-            "Threat Index": round(event["threat_index"], 1),
-            "Label": event.get("label"),
-            "Watermarked": "⭐ yes" if event.get("watermarked") else "-",
-        })
+        ts = datetime.fromtimestamp(event["timestamp"]).strftime("%H:%M:%S")
+        pill = TIER_PILL.get(event["tier"], event["tier"])
+        watermark = '<span class="mv-star">⭐ watermarked</span>' if event.get("watermarked") else '<span class="mv-dim">—</span>'
+        rows_html.append(f"""
+        <tr>
+            <td class="mv-mono">{ts}</td>
+            <td class="mv-mono">{event['client_id']}</td>
+            <td>{pill}</td>
+            <td class="mv-mono">{event['threat_index']:.1f}</td>
+            <td class="mv-mono">{event.get('label')}</td>
+            <td>{watermark}</td>
+        </tr>
+        """)
 
-    df = pd.DataFrame(rows)
-    st.dataframe(df, hide_index=True, use_container_width=True, height=min(400, 40 + 35 * len(rows)))
+    table_html = f"""
+    <div class="mv-table-wrap">
+    <table class="mv-table">
+        <thead>
+            <tr><th>Time</th><th>Client</th><th>Tier</th><th>Threat</th><th>Label</th><th>Watermark</th></tr>
+        </thead>
+        <tbody>
+            {''.join(rows_html)}
+        </tbody>
+    </table>
+    </div>
+    """
+    st.markdown(table_html, unsafe_allow_html=True)
