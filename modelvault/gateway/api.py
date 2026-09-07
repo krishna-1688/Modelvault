@@ -19,12 +19,14 @@ from __future__ import annotations
 
 import math
 import time
+from pathlib import Path
 
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from modelvault.gateway.auth import require_admin_key
 from modelvault.gateway.schemas import (
@@ -47,7 +49,18 @@ from modelvault.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONSOLE_DIR = PROJECT_ROOT / "console"
+
 app = FastAPI(title="ModelVault Gateway", version="1.0.0")
+
+# Serves the live HTML/JS/CSS console at /console/ (open with
+# /console/?key=<ADMIN_API_KEY> if one is configured -- the page reads the
+# key from the URL and attaches it as X-API-Key on its own polling requests).
+# Mounted on the gateway itself so there's exactly one process to run for
+# the whole demo -- no separate Streamlit server needed.
+if CONSOLE_DIR.exists():
+    app.mount("/console", StaticFiles(directory=str(CONSOLE_DIR), html=True), name="console")
 
 
 def _sanitize_non_finite(value):
