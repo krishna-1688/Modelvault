@@ -131,6 +131,11 @@ def predict(request: PredictRequest):
     if not state.is_defense_enabled():
         probabilities = predict_proba(features)[0]
         label = int(np.argmax(probabilities))
+        # Still logged (unlike Layers 2-4, which are genuinely skipped) so the
+        # dashboard visibly shows "traffic flowing, unscored" rather than
+        # freezing entirely -- a flat, zero-threat line is a clearer contrast
+        # against defended traffic than a stats panel that stops moving.
+        state.record_request(request.client_id, ResponseTier.NORMAL, 0.0, label=label, watermarked=False)
         return PredictResponse(
             tier=ResponseTier.NORMAL.value,
             label=label,
