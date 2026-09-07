@@ -15,8 +15,73 @@ let currentFilter = 'all';
 let renderedKeys = new Set();
 let requestHistory = [];   // rolling {t, total} samples for the sparkline
 let suspiciousHistory = []; // rolling suspicious% samples
+let referenceZone = null;
+let plottedPoints = new Set();
 
 document.getElementById('footer-url').textContent = window.location.origin;
+
+// ---------------- Feature space map ----------------
+// The 2D projection is fit ONCE at training time (train.py) purely for
+// display -- it has no bearing on detection math. This turns Layer 2's
+// abstract "macro distortion" score into something spatial and literal: an
+// attacker's queries visibly drift away from where real transactions sit.
+const FM_CENTER_X = 170, FM_CENTER_Y = 110, FM_PIXELS_PER_UNIT = 24;
+const FM_POINT_LIFETIME_MS = 20000;
+
+async function loadReferenceZone() {
+  try {
+    const res = await fetch('/admin/reference-zone', { headers: { 'X-API-Key': API_KEY } });
+    if (!res.ok) return;
+    referenceZone = await res.json();
+    const [sx, sy] = referenceZone.std;
+    document.getElementById('fm-zone-inner').setAttribute('rx', sx * FM_PIXELS_PER_UNIT);
+    document.getElementById('fm-zone-inner').setAttribute('ry', sy * FM_PIXELS_PER_UNIT);
+    document.getElementById('fm-zone-outer').setAttribute('rx', sx * FM_PIXELS_PER_UNIT * 2);
+    document.getElementById('fm-zone-outer').setAttribute('ry', sy * FM_PIXELS_PER_UNIT * 2);
+  } catch (e) { /* map stays empty; everything else still works */ }
+}
+
+function fmProject(x, y) {
+  const mx = referenceZone ? referenceZone.mean[0] : 0;
+  const my = referenceZone ? referenceZone.mean[1] : 0;
+  const px = FM_CENTER_X + (x - mx) * FM_PIXELS_PER_UNIT;
+  const py = FM_CENTER_Y + (y - my) * FM_PIXELS_PER_UNIT;
+  return [Math.max(8, Math.min(332, px)), Math.max(22, Math.min(212, py))];
+}
+
+function updateFeatureMap(events) {
+  const group = document.getElementById('fm-points');
+  events.forEach(event => {
+    const key = String(event.timestamp);
+    if (plottedPoints.has(key)) return;
+    const proj = event.trace && event.trace.layer2 && event.trace.layer2.projection;
+    if (!proj) return;
+    plottedPoints.add(key);
+    const [px, py] = fmProject(proj[0], proj[1]);
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', px);
+    circle.setAttribute('cy', py);
+    circle.setAttribute('r', event.tier === 'critical' ? 3.2 : 2.4);
+    circle.setAttribute('fill', TIER_COLORS[event.tier] || '#8b8d98');
+    circle.setAttribute('class', 'fm-point');
+    circle.dataset.key = key;
+    circle.dataset.ts = event.timestamp * 1000;
+    group.appendChild(circle);
+  });
+
+  // Age out old points so the map reflects recent behavior, not the entire
+  // session's history piling up indefinitely.
+  const now = Date.now();
+  Array.from(group.children).forEach(circle => {
+    const age = now - Number(circle.dataset.ts);
+    if (age > FM_POINT_LIFETIME_MS) {
+      circle.remove();
+      plottedPoints.delete(circle.dataset.key);
+    } else if (age > FM_POINT_LIFETIME_MS - 3000) {
+      circle.style.opacity = (FM_POINT_LIFETIME_MS - age) / 3000;
+    }
+  });
+}
 
 // ---------------- Clock ----------------
 function tickClock() { document.getElementById('clock').textContent = new Date().toLocaleTimeString(); }
@@ -289,7 +354,16 @@ function renderWaterfall(event) {
 
   if (t.layer3) {
     const extra = t.layer3.boundary_perturbed ? ' <span style="color:#a78bfa">· boundary-adjacent label flip applied</span>' : '';
-    rows.push(`<div class="wf-stage"><div class="wf-stage-name">L3 · Response</div><div class="wf-stage-body">tier <strong>${t.layer3.tier}</strong> — ${t.layer3.degradation}${extra}</div></div>`);
+    let eyeView = '';
+    if (t.layer3.undefended_probabilities) {
+      const undef = t.layer3.undefended_probabilities.map(p => p.toFixed(3)).join(', ');
+      const disclosed = t.layer3.disclosed_probabilities ? t.layer3.disclosed_probabilities.map(p => p.toFixed(3)).join(', ') : 'none (label only)';
+      eyeView = `<div class="eye-view">
+        <div class="eye-row"><span class="eye-label">Undefended API would return</span><span class="eye-val eye-bad">[${undef}]</span></div>
+        <div class="eye-row"><span class="eye-label">ModelVault actually returned</span><span class="eye-val eye-good">[${disclosed}]</span></div>
+      </div>`;
+    }
+    rows.push(`<div class="wf-stage"><div class="wf-stage-name">L3 · Response</div><div class="wf-stage-body">tier <strong>${t.layer3.tier}</strong> — ${t.layer3.degradation}${extra}${eyeView}</div></div>`);
   }
 
   if (t.layer4) {
@@ -457,6 +531,7 @@ function render(stats) {
   updateAttackSignature(events);
   updateClusterPanel(events);
   updateTraceList(events);
+  updateFeatureMap(events);
 
   maybeFlash(counts.critical || 0);
 
@@ -475,5 +550,6 @@ document.getElementById('defense-toggle').addEventListener('change', async (e) =
   } catch (err) { /* next poll resyncs */ }
 });
 
+loadReferenceZone();
 poll();
 setInterval(poll, POLL_MS);

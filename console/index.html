@@ -95,6 +95,25 @@
       <canvas id="donut-chart"></canvas>
       <div class="donut-legend" id="donut-legend"></div>
     </div>
+  </section>
+
+  <!-- ============ INSIGHTS ROW ============ -->
+  <section class="insights-row">
+    <div class="panel featuremap-panel">
+      <div class="panel-title">FEATURE SPACE MAP — WHERE QUERIES LAND vs. REAL TRAFFIC</div>
+      <svg id="featuremap-svg" viewBox="0 0 340 220" class="featuremap-svg">
+        <ellipse id="fm-zone-outer" cx="170" cy="110" rx="0" ry="0" class="fm-zone-outer"/>
+        <ellipse id="fm-zone-inner" cx="170" cy="110" rx="0" ry="0" class="fm-zone-inner"/>
+        <text x="170" y="16" class="fm-zone-label" text-anchor="middle">real traffic manifold</text>
+        <g id="fm-points"></g>
+      </svg>
+      <div class="fm-legend">
+        <span><span class="legend-dot" style="background:#34d399"></span>normal</span>
+        <span><span class="legend-dot" style="background:#fbbf24"></span>elevated</span>
+        <span><span class="legend-dot" style="background:#f87171"></span>critical</span>
+        <span class="fm-legend-note">shaded zone = 1σ / 2σ of real transaction traffic</span>
+      </div>
+    </div>
     <div class="panel cluster-panel">
       <div class="panel-title">CROSS-CLIENT CORRELATION</div>
       <div class="cluster-note" id="cluster-note">Monitoring for coordinated (Sybil-style) patterns across identities…</div>

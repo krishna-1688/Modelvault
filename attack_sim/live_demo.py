@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import os
 import time
+import uuid
 from pathlib import Path
 
 import requests
@@ -30,6 +31,12 @@ GATEWAY_PORT = os.environ.get("GATEWAY_PORT", "8000")
 # https://xxxx.trycloudflare.com
 GATEWAY_URL = os.environ.get("GATEWAY_URL") or f"http://{GATEWAY_HOST}:{GATEWAY_PORT}"
 N_SYBIL_CLIENTS = 25
+# Salts sybil client_ids so re-running the SAME attack type twice (e.g. once
+# with defense on, once off, to compare) produces a fresh set of identities
+# each time -- without this, "in_distribution-sybil-0..24" collides byte-for-
+# byte across runs, and the dashboard's distinct-client counter looks frozen
+# even though traffic is genuinely flowing.
+RUN_ID = uuid.uuid4().hex[:6]
 
 
 def generate(attack: str, n: int, seed: int):
@@ -51,7 +58,7 @@ def run_live_attack(attack: str, n: int, delay: float) -> None:
     session = requests.Session()
     sent, blocked = 0, 0
     for i, query in enumerate(queries):
-        client_id = f"{attack}-sybil-{i % N_SYBIL_CLIENTS}"
+        client_id = f"{attack}-{RUN_ID}-sybil-{i % N_SYBIL_CLIENTS}"
         try:
             response = session.post(
                 f"{GATEWAY_URL}/predict",

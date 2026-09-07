@@ -98,16 +98,29 @@ html, body {
 }
 
 /* ================= CHARTS ================= */
-.charts-row { display: grid; grid-template-columns: 1.5fr 0.85fr 1fr; gap: 12px; margin-bottom: 12px; }
-.chart-panel-main { height: 260px; }
-.chart-panel-main canvas { max-height: 208px; }
-.chart-panel-side canvas { max-height: 150px; }
-.donut-legend { display: flex; justify-content: center; gap: 12px; margin-top: 10px; font-size: 0.68rem; color: var(--text-dim); }
+.charts-row { display: grid; grid-template-columns: 1.6fr 1fr; gap: 12px; margin-bottom: 12px; }
+.chart-panel-main { height: 240px; }
+.chart-panel-main canvas { max-height: 188px; }
+.chart-panel-side canvas { max-height: 140px; }
+.donut-legend { display: flex; justify-content: center; gap: 12px; margin-top: 8px; font-size: 0.68rem; color: var(--text-dim); }
 .donut-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend-dot { width: 7px; height: 7px; border-radius: 50%; }
 
+.insights-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; margin-bottom: 12px; }
+
+/* ---- Feature space map ---- */
+.featuremap-panel { height: 300px; display: flex; flex-direction: column; }
+.featuremap-svg { width: 100%; flex: 1; background: #0d0e10; border-radius: 6px; }
+.fm-zone-outer { fill: rgba(91,141,239,0.05); stroke: rgba(91,141,239,0.18); stroke-width: 1; stroke-dasharray: 3 3; transition: rx 0.4s, ry 0.4s; }
+.fm-zone-inner { fill: rgba(91,141,239,0.10); stroke: rgba(91,141,239,0.3); stroke-width: 1; transition: rx 0.4s, ry 0.4s; }
+.fm-zone-label { fill: #3d4a63; font-size: 7px; font-family: var(--sans); letter-spacing: 0.04em; }
+.fm-point { transition: opacity 2.5s linear; }
+.fm-legend { display: flex; align-items: center; gap: 12px; margin-top: 8px; font-size: 0.66rem; color: var(--text-dim); }
+.fm-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.fm-legend-note { margin-left: auto; color: var(--text-mute); font-style: italic; }
+
 /* ---- Cross-client correlation / sybil cluster panel ---- */
-.cluster-panel { height: 260px; display: flex; flex-direction: column; }
+.cluster-panel { height: 300px; display: flex; flex-direction: column; }
 .cluster-note { font-size: 0.7rem; color: var(--text-mute); line-height: 1.4; margin-bottom: 8px; }
 .cluster-note.hot { color: var(--red); font-weight: 600; }
 .cluster-list { display: flex; flex-direction: column; gap: 5px; overflow-y: auto; flex: 1; }
@@ -182,8 +195,17 @@ html, body {
 
 @media (max-width: 1180px) {
   .charts-row { grid-template-columns: 1fr; }
+  .insights-row { grid-template-columns: 1fr; }
   .stat-strip { flex-wrap: wrap; }
 }
 
 /* ---- Reasoning line inside trace rows ---- */
 .trace-reason { font-style: italic; color: var(--text-dim); }
+
+/* ---- Attacker's-Eye View comparison ---- */
+.eye-view { margin-top: 6px; padding: 8px 10px; background: #0d0e10; border-radius: 6px; border: 1px solid var(--border-soft); }
+.eye-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 0; font-size: 0.7rem; }
+.eye-label { color: var(--text-mute); }
+.eye-val { font-family: var(--mono); }
+.eye-bad { color: var(--red); }
+.eye-good { color: var(--green); }

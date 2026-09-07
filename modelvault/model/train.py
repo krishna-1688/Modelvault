@@ -1,7 +1,7 @@
 """Trains the target fraud classifier and fits the reference density/manifold
 estimator used by Layer 2's macro signal.
 
-Three artifacts are produced and must travel together at serving time:
+Artifacts produced, all of which must travel together at serving time:
   - scaler.joblib: a StandardScaler fit on the raw training features. V1-V28
     are already PCA components from the original release (roughly
     zero-mean), but Amount is on a wildly different scale (0 to tens of
@@ -17,6 +17,11 @@ Three artifacts are produced and must travel together at serving time:
   - reference_density.joblib: a GaussianMixture fit on SCALED features,
     used to estimate how far an incoming query sits from real transaction
     traffic (Layer 2's macro signal).
+  - projection_2d.joblib: a 2-component PCA fit on SCALED features, used
+    ONLY to project queries onto a 2D plane for the live console's feature-
+    space map -- a visual, spatial version of the same "how far from real
+    traffic" question the macro signal already answers numerically. Never
+    used for detection math itself, purely a display aid.
 """
 from __future__ import annotations
 
@@ -24,6 +29,7 @@ from pathlib import Path
 
 import joblib
 import numpy as np
+from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     average_precision_score,
@@ -101,16 +107,30 @@ def train_target_model() -> None:
     )
     reference.fit(X_train_scaled[subsample_idx])
 
+    # 2D projection for the console's live feature-space map. Fit on the same
+    # subsample as the density model -- this is a display aid, not a
+    # detection mechanism, so it doesn't need the full training set either.
+    projection = PCA(n_components=2, random_state=settings.model.random_state)
+    projected = projection.fit_transform(X_train_scaled[subsample_idx])
+    reference_zone = {
+        "mean": projected.mean(axis=0).tolist(),
+        "std": projected.std(axis=0).tolist(),
+        "explained_variance_ratio": projection.explained_variance_ratio_.tolist(),
+    }
+
     TARGET_DIR.mkdir(parents=True, exist_ok=True)
     REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
 
     joblib.dump(scaler, TARGET_DIR / "scaler.joblib")
     joblib.dump(clf, TARGET_DIR / "target_classifier.joblib")
     joblib.dump(reference, REFERENCE_DIR / "reference_density.joblib")
+    joblib.dump(projection, REFERENCE_DIR / "projection_2d.joblib")
+    joblib.dump(reference_zone, REFERENCE_DIR / "reference_zone.joblib")
 
     logger.info("Saved scaler to %s", TARGET_DIR / "scaler.joblib")
     logger.info("Saved target classifier to %s", TARGET_DIR / "target_classifier.joblib")
     logger.info("Saved reference density model to %s", REFERENCE_DIR / "reference_density.joblib")
+    logger.info("Saved 2D projection to %s", REFERENCE_DIR / "projection_2d.joblib")
 
     print(f"Precision: {metrics['precision']:.4f}")
     print(f"Recall:    {metrics['recall']:.4f}")

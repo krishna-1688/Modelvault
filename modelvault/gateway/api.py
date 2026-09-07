@@ -44,7 +44,15 @@ from modelvault.layer3_response.boundary_perturbation import apply_boundary_pert
 from modelvault.layer3_response.throttling import ResponseTier, apply_throttling, classify_tier
 from modelvault.layer4_watermark.verification import WatermarkEvent, verify_ownership
 from modelvault.layer4_watermark.watermark import decide_and_apply_watermark
-from modelvault.model.predict import load_reference_model, load_scaler, load_target_model, predict_proba, transform_features
+from modelvault.model.predict import (
+    load_reference_model,
+    load_reference_zone,
+    load_scaler,
+    load_target_model,
+    predict_proba,
+    project_2d,
+    transform_features,
+)
 from modelvault.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -105,6 +113,18 @@ def ready():
     except Exception as exc:
         return ReadyResponse(ready=False, detail=f"Artifacts not loadable: {exc}")
     return ReadyResponse(ready=True, detail="Model, reference density, and scaler all loaded.")
+
+
+@app.get("/admin/reference-zone", dependencies=[Depends(require_admin_key)])
+def admin_reference_zone():
+    """The 2D bounds of what 'normal traffic' looks like on the console's
+    feature-space map (mean/std of real training data under the display-only
+    PCA projection from train.py). Fetched once by the console on load, then
+    every subsequent /predict response's projection is plotted against it."""
+    try:
+        return load_reference_zone()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="reference_zone.joblib not found -- retrain with `python -m modelvault.model.train`")
 
 
 def _validate_feature_count(features: list[float]) -> None:
@@ -188,17 +208,35 @@ def predict(request: PredictRequest):
         ResponseTier.ELEVATED: "probabilities rounded to 1 decimal",
         ResponseTier.CRITICAL: "label-only, no probabilities disclosed",
     }
+    # The Attacker's-Eye View: what the caller WOULD have learned from an
+    # undefended API (the full-precision probabilities, computed above before
+    # any throttling) vs. what they actually received. Only meaningful when
+    # degradation actually happened -- at the normal tier the two are identical.
+    undefended_probabilities = probabilities.round(4).tolist() if tier != ResponseTier.NORMAL else None
+
+    try:
+        projection = project_2d(features)
+    except FileNotFoundError:
+        # projection_2d.joblib is new (added alongside the console's feature-
+        # space map); an artifacts/ dir trained before that change won't have
+        # it. Degrade gracefully -- the map just shows no points -- rather
+        # than 500ing every single request over a purely cosmetic artifact.
+        projection = None
+
     trace = {
         "layer1": {"allowed": True},
         "layer2": {
             "threat_index": round(threat_index, 1),
             "macro_feature_distortion": round(threat_result["macro_feature_distortion"], 1),
             "micro_coverage_density": round(threat_result["micro_coverage_density"], 1),
+            "projection": projection,
         },
         "layer3": {
             "tier": tier.value,
             "degradation": degradation_by_tier[tier],
             "boundary_perturbed": boundary_perturbed,
+            "undefended_probabilities": undefended_probabilities,
+            "disclosed_probabilities": response["probabilities"],
         },
         "layer4": {
             "triggered": watermarked,

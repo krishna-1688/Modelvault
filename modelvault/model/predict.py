@@ -15,6 +15,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TARGET_PATH = PROJECT_ROOT / "artifacts" / "target" / "target_classifier.joblib"
 REFERENCE_PATH = PROJECT_ROOT / "artifacts" / "reference" / "reference_density.joblib"
 SCALER_PATH = PROJECT_ROOT / "artifacts" / "target" / "scaler.joblib"
+PROJECTION_2D_PATH = PROJECT_ROOT / "artifacts" / "reference" / "projection_2d.joblib"
+REFERENCE_ZONE_PATH = PROJECT_ROOT / "artifacts" / "reference" / "reference_zone.joblib"
 
 
 @lru_cache(maxsize=1)
@@ -30,6 +32,24 @@ def load_reference_model():
 @lru_cache(maxsize=1)
 def load_scaler():
     return joblib.load(SCALER_PATH)
+
+
+@lru_cache(maxsize=1)
+def load_projection_2d():
+    return joblib.load(PROJECTION_2D_PATH)
+
+
+@lru_cache(maxsize=1)
+def load_reference_zone() -> dict:
+    return joblib.load(REFERENCE_ZONE_PATH)
+
+
+def project_2d(scaled_features: np.ndarray) -> list[float]:
+    """Projects an already-scaled feature vector onto the 2D display plane
+    fit in train.py. Display-only -- never used for detection math."""
+    projection = load_projection_2d()
+    point = projection.transform(np.atleast_2d(scaled_features))[0]
+    return point.tolist()
 
 
 def transform_features(features: np.ndarray) -> np.ndarray:
