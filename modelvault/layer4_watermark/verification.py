@@ -20,6 +20,7 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
+from scipy.stats import binom
 
 
 @dataclass
@@ -39,15 +40,13 @@ class VerificationResult:
 
 
 def _binomial_sf(k: int, n: int, p: float) -> float:
-    """P(X >= k) for X ~ Binomial(n, p), computed exactly."""
+    """P(X >= k) for X ~ Binomial(n, p)."""
     if k <= 0:
         return 1.0
     if k > n:
         return 0.0
-    total = 0.0
-    for i in range(k, n + 1):
-        total += math.comb(n, i) * (p**i) * ((1 - p) ** (n - i))
-    return min(1.0, total)
+    # sf is P(X > x), so we evaluate at k-1 to get P(X >= k)
+    return float(binom.sf(k - 1, n, p))
 
 
 def verify_ownership(

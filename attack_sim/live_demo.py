@@ -25,7 +25,10 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 GATEWAY_HOST = os.environ.get("GATEWAY_HOST", "localhost")
 GATEWAY_PORT = os.environ.get("GATEWAY_PORT", "8000")
-GATEWAY_URL = f"http://{GATEWAY_HOST}:{GATEWAY_PORT}"
+# GATEWAY_URL overrides host/port entirely -- needed for tunnels (Cloudflare,
+# ngrok) that serve over https with no explicit port, e.g.
+# https://xxxx.trycloudflare.com
+GATEWAY_URL = os.environ.get("GATEWAY_URL") or f"http://{GATEWAY_HOST}:{GATEWAY_PORT}"
 N_SYBIL_CLIENTS = 25
 
 

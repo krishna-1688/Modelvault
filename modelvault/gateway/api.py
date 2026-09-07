@@ -181,11 +181,13 @@ def verify_ownership_endpoint(request: VerifyOwnershipRequest):
     if not events:
         return VerifyOwnershipResponse(verified=False, matches=0, total_triggers=0, confidence=0.0, chance_rate=0.0)
 
+    predictions_by_bytes = {event.query_features.tobytes(): predictions_by_index[idx] for idx, event in enumerate(events)}
+
     def suspect_predict_fn(query_features: np.ndarray) -> int:
-        for idx, event in enumerate(events):
-            if np.array_equal(event.query_features, query_features):
-                return predictions_by_index[idx]
-        raise ValueError("query not found")
+        try:
+            return predictions_by_bytes[query_features.tobytes()]
+        except KeyError:
+            raise ValueError("query not found")
 
     n_classes = len(load_target_model().classes_)
     result = verify_ownership(events, suspect_predict_fn, n_classes=n_classes, confidence_threshold=request.confidence_threshold)
