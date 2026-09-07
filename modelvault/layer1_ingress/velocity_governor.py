@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 
 from modelvault.utils.config_loader import get_settings
+from cachetools import TTLCache
 
 
 @dataclass
@@ -25,7 +26,9 @@ class VelocityGovernor:
         self.capacity = requests_per_window if requests_per_window is not None else settings.rate_limit.requests_per_window
         self.window_seconds = window_seconds if window_seconds is not None else settings.rate_limit.window_seconds
         self.refill_rate = self.capacity / self.window_seconds  # tokens per second
-        self._buckets: dict[str, _Bucket] = {}
+        # Use TTLCache to automatically evict buckets older than window_seconds,
+        # with a maxsize of 100,000 to protect against extreme sybil floods.
+        self._buckets = TTLCache(maxsize=100000, ttl=self.window_seconds)
         # FastAPI runs sync `def` endpoints in a threadpool, so concurrent
         # requests can race on the same client's bucket without this --
         # a token-bucket read-modify-write is not atomic on its own.

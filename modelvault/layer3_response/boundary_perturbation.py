@@ -35,7 +35,7 @@ def _get_salt() -> str:
 def _deterministic_unit_interval(client_id: str, query_features: np.ndarray) -> float:
     """Maps (client_id, query, salt) to a deterministic value in [0, 1)."""
     salt = _get_salt()
-    payload = f"{salt}:{client_id}:{np.asarray(query_features).tobytes().hex()}".encode()
+    payload = f"{salt}:{client_id}:".encode() + np.asarray(query_features).tobytes()
     digest = hashlib.sha256(payload).digest()
     return int.from_bytes(digest[:8], "big") / 2**64
 

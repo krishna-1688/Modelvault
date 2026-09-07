@@ -62,7 +62,7 @@ def _flip_rate_for_tier(tier: ResponseTier) -> float:
 
 def _deterministic_draw(client_id: str, query_features: np.ndarray) -> float:
     secret = _get_secret()
-    message = f"{client_id}:{np.asarray(query_features).tobytes().hex()}".encode()
+    message = f"{client_id}:".encode() + np.asarray(query_features).tobytes()
     digest = hmac.new(secret, message, hashlib.sha256).digest()
     return int.from_bytes(digest[:8], "big") / 2**64
 
@@ -73,7 +73,7 @@ def watermark_target_label(client_id: str, query_features: np.ndarray, true_labe
     verification can recompute it without needing to know whether the
     original response was actually watermarked."""
     secret = _get_secret()
-    message = f"target:{client_id}:{np.asarray(query_features).tobytes().hex()}".encode()
+    message = f"target:{client_id}:".encode() + np.asarray(query_features).tobytes()
     digest = hmac.new(secret, message, hashlib.sha256).digest()
     offset = 1 + (int.from_bytes(digest[:4], "big") % max(1, n_classes - 1))
     return (true_label + offset) % n_classes
