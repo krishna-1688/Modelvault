@@ -22,13 +22,14 @@ import time
 from pathlib import Path
 
 import numpy as np
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from modelvault.gateway.auth import require_admin_key
+from modelvault.gateway.clone_fidelity import compute_clone_fidelity
 from modelvault.gateway.schemas import (
     AdminStatsResponse,
     PredictRequest,
@@ -42,7 +43,7 @@ from modelvault.gateway.state import get_state
 from modelvault.layer2_detection.threat_index import compute_threat_index
 from modelvault.layer3_response.boundary_perturbation import apply_boundary_perturbation
 from modelvault.layer3_response.throttling import ResponseTier, apply_throttling, classify_tier
-from modelvault.layer4_watermark.verification import WatermarkEvent, verify_ownership
+from modelvault.layer4_watermark.verification import WatermarkEvent, _binomial_sf, verify_ownership
 from modelvault.layer4_watermark.watermark import decide_and_apply_watermark
 from modelvault.model.predict import (
     load_reference_model,
@@ -137,9 +138,10 @@ def _validate_feature_count(features: list[float]) -> None:
 
 
 @app.post("/predict", response_model=PredictResponse)
-def predict(request: PredictRequest):
+def predict(request: PredictRequest, http_request: Request):
     state = get_state()
     _validate_feature_count(request.features)
+    source_ip = http_request.client.host if http_request.client else "unknown"
 
     # Layer 1 -- ingress velocity governor. Checked before any scaling/model
     # work so a rate-limited caller doesn't burn compute on rejected requests.
@@ -147,6 +149,7 @@ def predict(request: PredictRequest):
     # the dashboard couldn't show Layer 1 doing its job.
     if not state.velocity_governor.allow(request.client_id):
         state.record_blocked_request(request.client_id)
+        state.record_origin(source_ip, request.client_id, suspicious=True)
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     features = transform_features(np.asarray(request.features, dtype=float))[0]
@@ -165,6 +168,11 @@ def predict(request: PredictRequest):
             "layer4": {"triggered": False, "reason": "defense disabled"},
         }
         state.record_request(request.client_id, ResponseTier.NORMAL, 0.0, label=label, watermarked=False, trace=trace)
+        state.record_origin(source_ip, request.client_id, suspicious=False)
+        # With defense off the attacker receives the true label, so their
+        # clone learns unimpeded -- exactly the contrast the fidelity meter
+        # is there to make visible.
+        state.record_extraction_sample(features, disclosed_label=label, true_label=label)
         return PredictResponse(
             tier=ResponseTier.NORMAL.value,
             label=label,
@@ -249,6 +257,11 @@ def predict(request: PredictRequest):
         request.client_id, tier, threat_index,
         label=response["label"], watermarked=watermarked, trace=trace,
     )
+    state.record_origin(source_ip, request.client_id, suspicious=tier != ResponseTier.NORMAL)
+    # original_label here is the target model's true argmax BEFORE boundary
+    # perturbation or watermarking -- so the pair (disclosed, true) captures
+    # exactly what the defense withheld or corrupted on this request.
+    state.record_extraction_sample(features, disclosed_label=response["label"], true_label=original_label)
 
     return PredictResponse(
         tier=tier.value,
@@ -300,6 +313,54 @@ def verify_ownership_endpoint(request: VerifyOwnershipRequest):
 @app.get("/admin/stats", response_model=AdminStatsResponse, dependencies=[Depends(require_admin_key)])
 def admin_stats():
     return get_state().stats()
+
+
+@app.get("/admin/clone-fidelity", dependencies=[Depends(require_admin_key)])
+def admin_clone_fidelity():
+    """How much of the target model the caller population has actually
+    reconstructed so far, defended vs. undefended. See clone_fidelity.py --
+    both estimates are fit on the same real query set, so the gap between
+    them is attributable to this gateway's degradation and nothing else."""
+    return compute_clone_fidelity(get_state().extraction_samples())
+
+
+@app.get("/admin/ownership-proof", dependencies=[Depends(require_admin_key)])
+def admin_ownership_proof():
+    """Forward-looking strength of the ownership case being built right now.
+
+    We can't score a suspect model that doesn't exist yet, so instead of
+    faking one this reports the statistical POWER of the watermark evidence
+    accumulated so far: given N planted watermarks, if a stolen clone later
+    reproduced them at a typical surrogate learning rate, what confidence
+    would the binomial test in verification.py return? Same math, same
+    chance-rate assumption -- just evaluated prospectively."""
+    state = get_state()
+    n = len(state.all_watermark_events())
+    n_classes = len(load_target_model().classes_)
+    chance_rate = 1.0 / n_classes
+
+    projections = []
+    for reproduce_rate in (0.6, 0.7, 0.8):
+        if n == 0:
+            projections.append({"reproduce_rate": reproduce_rate, "confidence": 0.0})
+            continue
+        matches = int(round(reproduce_rate * n))
+        confidence = 1.0 - _binomial_sf(matches, n, chance_rate)
+        projections.append({"reproduce_rate": reproduce_rate, "confidence": confidence})
+
+    # Smallest evidence set that would clear 99% confidence at a 70% rate.
+    watermarks_needed = None
+    for candidate in range(1, 400):
+        if 1.0 - _binomial_sf(int(round(0.7 * candidate)), candidate, chance_rate) >= 0.99:
+            watermarks_needed = candidate
+            break
+
+    return {
+        "watermarks_planted": n,
+        "chance_rate": chance_rate,
+        "projections": projections,
+        "watermarks_needed_for_99pct": watermarks_needed,
+    }
 
 
 @app.post("/admin/toggle-defense", dependencies=[Depends(require_admin_key)])

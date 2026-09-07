@@ -69,6 +69,10 @@ class AdminStatsResponse(BaseModel):
     defense_enabled: bool
     recent_threat_indices: list[float]
     recent_events: list[dict] = Field(default_factory=list)
+    origins: list[dict] = Field(default_factory=list)
+    incident_started_at: Optional[float] = None
+    first_degraded_at: Optional[float] = None
+    first_watermark_at: Optional[float] = None
 
 
 class ToggleDefenseRequest(BaseModel):

@@ -469,6 +469,150 @@ document.getElementById('trace-filters').addEventListener('click', (e) => {
   applyFilterToDom();
 });
 
+// ---------------- Incident bar ----------------
+function fmtDuration(seconds) {
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  const m = Math.floor(seconds / 60), s = Math.floor(seconds % 60);
+  return `${m}m ${s}s`;
+}
+
+function updateIncidentBar(stats) {
+  const bar = document.getElementById('incident-bar');
+  const title = document.getElementById('incident-title');
+  const detail = document.getElementById('incident-detail');
+  const timer = document.getElementById('incident-timer');
+
+  const origins = stats.origins || [];
+  const hostile = origins.filter(o => o.suspicious > 0);
+
+  if (!stats.incident_started_at || hostile.length === 0) {
+    bar.className = 'incident-bar idle';
+    title.textContent = 'NO ACTIVE INCIDENT';
+    detail.textContent = 'Monitoring inbound traffic…';
+    timer.textContent = '';
+    return;
+  }
+
+  const top = hostile[0];
+  const identities = hostile.reduce((s, o) => s + o.identities, 0);
+  const suspicious = hostile.reduce((s, o) => s + o.suspicious, 0);
+
+  bar.className = 'incident-bar active';
+  title.textContent = 'EXTRACTION ATTEMPT IN PROGRESS';
+  detail.textContent = `origin ${top.source_ip} · ${identities} identities · ${suspicious} suspicious queries`;
+  timer.textContent = `T+${fmtDuration((Date.now() / 1000) - stats.incident_started_at)}`;
+}
+
+// ---------------- Attack phase tracker ----------------
+function updatePhases(stats) {
+  const anyTraffic = stats.total_requests > 0;
+  const detected = !!stats.incident_started_at;
+  const degrading = !!stats.first_degraded_at;
+  const watermarked = !!stats.first_watermark_at;
+
+  const set = (id, on, hot) => {
+    const el = document.getElementById(id);
+    el.className = 'phase' + (on ? (hot ? ' hot' : ' done') : '');
+  };
+  set('phase-1', anyTraffic, false);
+  set('phase-2', detected, true);
+  set('phase-3', degrading, true);
+  set('phase-4', watermarked, true);
+}
+
+// ---------------- Adversary origins ----------------
+function updateAdversaries(stats) {
+  const list = document.getElementById('adversary-list');
+  const origins = stats.origins || [];
+  if (origins.length === 0) {
+    list.innerHTML = '<div class="adversary-empty">No traffic sources seen yet.</div>';
+    return;
+  }
+  list.innerHTML = origins.map(o => {
+    const hostile = o.suspicious > 0;
+    const ratio = o.requests ? Math.round((o.suspicious / o.requests) * 100) : 0;
+    const sybil = o.identities >= 5
+      ? `<span class="adversary-tag">⚠ ${o.identities} SYBIL IDENTITIES FROM ONE ORIGIN</span>` : '';
+    return `
+      <div class="adversary-card ${hostile ? 'hostile' : ''}">
+        <div class="adversary-ip">${o.source_ip}</div>
+        <div class="adversary-meta">${o.requests} req · ${o.identities} ids · ${ratio}% suspicious</div>
+        ${sybil}
+      </div>`;
+  }).join('');
+}
+
+// ---------------- Theft meter (clone fidelity) ----------------
+async function updateTheftMeter() {
+  try {
+    const res = await fetch('/admin/clone-fidelity', { headers: { 'X-API-Key': API_KEY } });
+    if (!res.ok) return;
+    const f = await res.json();
+
+    const waiting = document.getElementById('theft-waiting');
+    const live = document.getElementById('theft-live');
+
+    if (!f.ready) {
+      waiting.style.display = '';
+      live.style.display = 'none';
+      document.getElementById('theft-needed').textContent = f.min_samples;
+      document.getElementById('theft-progress-fill').style.width =
+        Math.min(100, (f.samples / f.min_samples) * 100) + '%';
+      return;
+    }
+
+    waiting.style.display = 'none';
+    live.style.display = '';
+
+    const defended = f.defended_fidelity * 100;
+    const undefended = f.undefended_fidelity * 100;
+    const prevented = (f.prevented_points || 0) * 100;
+
+    const valueEl = document.getElementById('theft-defended');
+    valueEl.textContent = defended.toFixed(0) + '%';
+    valueEl.style.color = defended > 80 ? TIER_COLORS.critical : defended > 60 ? TIER_COLORS.elevated : TIER_COLORS.normal;
+
+    document.getElementById('theft-bar-defended').style.width = defended + '%';
+    document.getElementById('theft-bar-undefended').style.width = undefended + '%';
+    document.getElementById('theft-val-defended').textContent = defended.toFixed(0) + '%';
+    document.getElementById('theft-val-undefended').textContent = undefended.toFixed(0) + '%';
+
+    const prev = document.getElementById('theft-prevented');
+    if (prevented > 0.5) {
+      prev.style.display = '';
+      prev.textContent = `✓ ${prevented.toFixed(0)} percentage points of model theft prevented — from ${f.samples} answered queries`;
+    } else {
+      prev.style.display = '';
+      prev.textContent = `Monitoring — ${f.samples} answered queries analysed`;
+    }
+  } catch (e) { /* leave last known state on screen */ }
+}
+
+// ---------------- Ownership evidence ----------------
+async function updateOwnershipEvidence() {
+  try {
+    const res = await fetch('/admin/ownership-proof', { headers: { 'X-API-Key': API_KEY } });
+    if (!res.ok) return;
+    const p = await res.json();
+
+    document.getElementById('ev-watermarks').textContent = p.watermarks_planted;
+
+    const at70 = (p.projections || []).find(x => x.reproduce_rate === 0.7);
+    const conf = at70 ? at70.confidence * 100 : 0;
+    document.getElementById('ev-confidence').textContent = p.watermarks_planted ? conf.toFixed(1) + '%' : '—';
+    document.getElementById('ev-fill').style.width = Math.min(100, conf) + '%';
+
+    const note = document.getElementById('ev-note');
+    if (!p.watermarks_planted) {
+      note.textContent = 'No watermark evidence collected yet.';
+    } else if (conf >= 99) {
+      note.innerHTML = `Evidence is court-ready: a clone reproducing 70% of these watermarks would be identified as stolen at <strong>${conf.toFixed(1)}%</strong> statistical confidence.`;
+    } else {
+      note.innerHTML = `Building evidence — <strong>${p.watermarks_needed_for_99pct}</strong> watermarks needed to reach 99% proof confidence at a 70% reproduction rate.`;
+    }
+  } catch (e) { /* leave last known state on screen */ }
+}
+
 // ---------------- Flash + status ----------------
 function maybeFlash(criticalCount) {
   if (criticalCount > lastCriticalCount) {
@@ -527,6 +671,10 @@ function render(stats) {
 
   updateBanner(stats);
 
+  updateIncidentBar(stats);
+  updatePhases(stats);
+  updateAdversaries(stats);
+
   const events = stats.recent_events || [];
   updateAttackSignature(events);
   updateClusterPanel(events);
@@ -550,6 +698,16 @@ document.getElementById('defense-toggle').addEventListener('change', async (e) =
   } catch (err) { /* next poll resyncs */ }
 });
 
+// The theft meter and ownership evidence hit separate endpoints that each do
+// real work server-side (fitting two surrogates / running binomial math), so
+// they poll on a slower cadence than the 1s stats loop.
+function pollHeavy() {
+  updateTheftMeter();
+  updateOwnershipEvidence();
+}
+
 loadReferenceZone();
 poll();
+pollHeavy();
 setInterval(poll, POLL_MS);
+setInterval(pollHeavy, 2500);

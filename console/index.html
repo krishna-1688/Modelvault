@@ -6,7 +6,7 @@
 <title>ModelVault — Defense Console</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -24,11 +24,11 @@
       </svg>
       <span class="brand-title">ModelVault</span>
       <span class="brand-divider">/</span>
-      <span class="brand-sub">Defense Console</span>
+      <span class="brand-sub">Model Extraction Defense</span>
     </div>
 
     <div class="topbar-right">
-      <div class="target-chip">Protecting <strong>Fraud Classifier</strong> (RandomForest, 284K tx)</div>
+      <div class="target-chip">Protecting <strong>Fraud Classifier</strong> · RandomForest · 284K tx</div>
       <div class="clock" id="clock">--:--:--</div>
       <div class="status-pill" id="status-pill"><span class="pulse-dot"></span><span id="status-text">CONNECTING</span></div>
       <div class="toggle-group">
@@ -41,6 +41,79 @@
     </div>
   </header>
 
+  <!-- ============ INCIDENT BAR ============ -->
+  <div class="incident-bar idle" id="incident-bar">
+    <span class="incident-dot"></span>
+    <span class="incident-title" id="incident-title">NO ACTIVE INCIDENT</span>
+    <span class="incident-detail" id="incident-detail">Monitoring inbound traffic…</span>
+    <span class="incident-timer" id="incident-timer"></span>
+  </div>
+
+  <!-- ============ HERO: THEFT METER + EVIDENCE ============ -->
+  <section class="hero-row">
+
+    <div class="panel theft-panel">
+      <div class="panel-title">MODEL RECONSTRUCTION — HOW MUCH HAS BEEN STOLEN</div>
+      <div class="theft-body" id="theft-body">
+        <div class="theft-waiting" id="theft-waiting">
+          Estimating… need <span id="theft-needed">40</span> answered queries to fit a surrogate.
+          <div class="theft-progress"><div class="theft-progress-fill" id="theft-progress-fill"></div></div>
+        </div>
+        <div class="theft-live" id="theft-live" style="display:none">
+          <div class="theft-main">
+            <div class="theft-value" id="theft-defended">0%</div>
+            <div class="theft-caption">of your model reconstructed by the attacker <strong>with ModelVault active</strong></div>
+          </div>
+          <div class="theft-bars">
+            <div class="theft-bar-row">
+              <span class="theft-bar-label">With ModelVault</span>
+              <div class="theft-bar-track"><div class="theft-bar-fill defended" id="theft-bar-defended"></div></div>
+              <span class="theft-bar-val" id="theft-val-defended">—</span>
+            </div>
+            <div class="theft-bar-row">
+              <span class="theft-bar-label">Without defense</span>
+              <div class="theft-bar-track"><div class="theft-bar-fill undefended" id="theft-bar-undefended"></div></div>
+              <span class="theft-bar-val" id="theft-val-undefended">—</span>
+            </div>
+          </div>
+          <div class="theft-prevented" id="theft-prevented"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel side-stack">
+      <div class="mini-panel">
+        <div class="panel-title">ATTACK PHASE</div>
+        <div class="phases" id="phases">
+          <div class="phase" id="phase-1"><span class="phase-dot"></span><span class="phase-label">Recon</span></div>
+          <div class="phase-line"></div>
+          <div class="phase" id="phase-2"><span class="phase-dot"></span><span class="phase-label">Detected</span></div>
+          <div class="phase-line"></div>
+          <div class="phase" id="phase-3"><span class="phase-dot"></span><span class="phase-label">Degrading</span></div>
+          <div class="phase-line"></div>
+          <div class="phase" id="phase-4"><span class="phase-dot"></span><span class="phase-label">Watermarked</span></div>
+        </div>
+      </div>
+      <div class="mini-panel">
+        <div class="panel-title">OWNERSHIP EVIDENCE — COURTROOM READINESS</div>
+        <div class="evidence-row">
+          <div class="evidence-stat"><span class="evidence-val" id="ev-watermarks">0</span><span class="evidence-lbl">watermarks planted</span></div>
+          <div class="evidence-stat"><span class="evidence-val" id="ev-confidence">—</span><span class="evidence-lbl">proof confidence</span></div>
+        </div>
+        <div class="evidence-track"><div class="evidence-fill" id="ev-fill"></div></div>
+        <div class="evidence-note" id="ev-note">No watermark evidence collected yet.</div>
+      </div>
+    </div>
+
+    <div class="panel adversary-panel">
+      <div class="panel-title">ADVERSARY ORIGINS</div>
+      <div class="adversary-list" id="adversary-list">
+        <div class="adversary-empty">No traffic sources seen yet.</div>
+      </div>
+    </div>
+
+  </section>
+
   <!-- ============ STAT STRIP ============ -->
   <section class="stat-strip">
     <div class="stat-chip">
@@ -51,7 +124,7 @@
     <div class="stat-sep"></div>
     <div class="stat-chip">
       <span class="stat-value" id="kpi-clients">0</span>
-      <span class="stat-label">Clients</span>
+      <span class="stat-label">Identities</span>
     </div>
     <div class="stat-sep"></div>
     <div class="stat-chip">
@@ -124,7 +197,7 @@
   <!-- ============ REQUEST TRACE INSPECTOR ============ -->
   <section class="panel trace-panel">
     <div class="trace-header">
-      <div class="panel-title" style="margin:0">REQUEST TRACE — LIVE</div>
+      <div class="panel-title" style="margin:0">REQUEST TRACE — CLICK ANY ROW FOR THE FULL LAYER-BY-LAYER DECISION</div>
       <div class="trace-filters" id="trace-filters">
         <button class="filter-pill active" data-filter="all">All</button>
         <button class="filter-pill" data-filter="normal">Normal</button>
