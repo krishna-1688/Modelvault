@@ -46,6 +46,7 @@
     <div class="stat-chip">
       <span class="stat-value" id="kpi-requests">0</span>
       <span class="stat-label">Requests</span>
+      <svg class="sparkline" id="spark-requests" viewBox="0 0 100 24" preserveAspectRatio="none"></svg>
     </div>
     <div class="stat-sep"></div>
     <div class="stat-chip">
@@ -66,6 +67,7 @@
     <div class="stat-chip">
       <span class="stat-value" id="kpi-suspicious">0%</span>
       <span class="stat-label">Suspicious</span>
+      <svg class="sparkline" id="spark-suspicious" viewBox="0 0 100 24" preserveAspectRatio="none"></svg>
     </div>
     <div class="stat-sep"></div>
     <div class="stat-chip stat-chip-gauge">
@@ -79,6 +81,7 @@
   <div id="alert-banner" class="alert-banner alert-ok">
     <span id="alert-icon">●</span>
     <span id="alert-text">Waiting for traffic…</span>
+    <span class="signature-badge" id="signature-badge" style="display:none"></span>
   </div>
 
   <!-- ============ CHARTS ROW ============ -->
@@ -91,6 +94,11 @@
       <div class="panel-title">TIER MIX</div>
       <canvas id="donut-chart"></canvas>
       <div class="donut-legend" id="donut-legend"></div>
+    </div>
+    <div class="panel cluster-panel">
+      <div class="panel-title">CROSS-CLIENT CORRELATION</div>
+      <div class="cluster-note" id="cluster-note">Monitoring for coordinated (Sybil-style) patterns across identities…</div>
+      <div class="cluster-list" id="cluster-list"></div>
     </div>
   </section>
 

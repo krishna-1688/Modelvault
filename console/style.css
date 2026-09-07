@@ -75,7 +75,8 @@ html, body {
   display: flex; align-items: stretch; background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 12px 18px; margin-bottom: 12px; gap: 18px;
 }
-.stat-chip { display: flex; flex-direction: column; justify-content: center; min-width: 78px; }
+.stat-chip { display: flex; flex-direction: column; justify-content: center; min-width: 78px; position: relative; }
+.sparkline { width: 60px; height: 20px; margin-top: 4px; opacity: 0.85; }
 .stat-value { font-family: var(--mono); font-size: 1.35rem; font-weight: 700; color: var(--text); line-height: 1.15; transition: color 0.2s; }
 .stat-value.bump { animation: bump 0.35s ease; }
 @keyframes bump { 40% { color: var(--blue); transform: scale(1.08); } }
@@ -90,15 +91,32 @@ html, body {
 .alert-ok { background: rgba(52,211,153,0.06); border-color: rgba(52,211,153,0.25); color: #6ee7b7; }
 .alert-warning { background: rgba(251,191,36,0.06); border-color: rgba(251,191,36,0.25); color: #fcd34d; }
 .alert-critical { background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.3); color: #fca5a5; }
+.signature-badge {
+  margin-left: auto; font-family: var(--mono); font-size: 0.66rem; font-weight: 700;
+  padding: 2px 9px; border-radius: 5px; background: rgba(167,139,250,0.12); color: var(--purple);
+  border: 1px solid rgba(167,139,250,0.3); letter-spacing: 0.03em;
+}
 
 /* ================= CHARTS ================= */
-.charts-row { display: grid; grid-template-columns: 1.8fr 1fr; gap: 12px; margin-bottom: 12px; }
+.charts-row { display: grid; grid-template-columns: 1.5fr 0.85fr 1fr; gap: 12px; margin-bottom: 12px; }
 .chart-panel-main { height: 260px; }
 .chart-panel-main canvas { max-height: 208px; }
 .chart-panel-side canvas { max-height: 150px; }
 .donut-legend { display: flex; justify-content: center; gap: 12px; margin-top: 10px; font-size: 0.68rem; color: var(--text-dim); }
 .donut-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+/* ---- Cross-client correlation / sybil cluster panel ---- */
+.cluster-panel { height: 260px; display: flex; flex-direction: column; }
+.cluster-note { font-size: 0.7rem; color: var(--text-mute); line-height: 1.4; margin-bottom: 8px; }
+.cluster-note.hot { color: var(--red); font-weight: 600; }
+.cluster-list { display: flex; flex-direction: column; gap: 5px; overflow-y: auto; flex: 1; }
+.cluster-row { display: grid; grid-template-columns: 1fr 40px 34px; align-items: center; gap: 8px; padding: 4px 2px; }
+.cluster-client { font-family: var(--mono); font-size: 0.7rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cluster-bar-track { height: 4px; background: #1c1e22; border-radius: 3px; overflow: hidden; grid-column: 1 / -1; margin-top: -2px; }
+.cluster-bar-fill { height: 100%; border-radius: 3px; }
+.cluster-count { font-family: var(--mono); font-size: 0.68rem; color: var(--text-mute); text-align: right; }
+.cluster-avg { font-family: var(--mono); font-size: 0.68rem; text-align: right; font-weight: 700; }
 
 /* ================= TRACE INSPECTOR ================= */
 .trace-panel { padding-bottom: 6px; }
@@ -166,3 +184,6 @@ html, body {
   .charts-row { grid-template-columns: 1fr; }
   .stat-strip { flex-wrap: wrap; }
 }
+
+/* ---- Reasoning line inside trace rows ---- */
+.trace-reason { font-style: italic; color: var(--text-dim); }

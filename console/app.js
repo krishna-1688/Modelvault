@@ -7,13 +7,14 @@ const POLL_MS = 1000;
 const TIER_NORMAL_MAX = 35;
 const TIER_ELEVATED_MAX = 70;
 const TIER_COLORS = { normal: '#34d399', elevated: '#fbbf24', critical: '#f87171', blocked: '#8b8d98' };
+const MAX_TRACE_ROWS = 150;
 
-let lastEventTimestamp = 0;
 let lastCriticalCount = 0;
 let previousValues = {};
-let expandedRows = new Set();
 let currentFilter = 'all';
-let allEvents = [];
+let renderedKeys = new Set();
+let requestHistory = [];   // rolling {t, total} samples for the sparkline
+let suspiciousHistory = []; // rolling suspicious% samples
 
 document.getElementById('footer-url').textContent = window.location.origin;
 
@@ -21,6 +22,38 @@ document.getElementById('footer-url').textContent = window.location.origin;
 function tickClock() { document.getElementById('clock').textContent = new Date().toLocaleTimeString(); }
 setInterval(tickClock, 1000);
 tickClock();
+
+// ---------------- Audio alert (Web Audio API, no asset files) ----------------
+let audioCtx = null;
+function playAlertTone() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.18);
+    gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.35);
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.35);
+  } catch (e) { /* autoplay policies may block until first user interaction -- silently skip */ }
+}
+
+// ---------------- Sparklines (plain inline SVG, no chart library needed) ----------------
+function drawSparkline(svgId, values, color) {
+  const svg = document.getElementById(svgId);
+  if (!svg || values.length < 2) return;
+  const w = 100, h = 24;
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = max - min || 1;
+  const points = values.map((v, i) => {
+    const x = (i / (values.length - 1)) * w;
+    const y = h - ((v - min) / range) * (h - 4) - 2;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  svg.innerHTML = `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
 
 // ---------------- Charts ----------------
 const bandsPlugin = {
@@ -104,7 +137,7 @@ function setStat(id, value) {
   el.textContent = value;
 }
 
-// ---------------- Alert banner ----------------
+// ---------------- Alert banner + attack signature ----------------
 function updateBanner(stats) {
   const counts = stats.tier_counts;
   const total = (counts.normal || 0) + (counts.elevated || 0) + (counts.critical || 0);
@@ -124,6 +157,80 @@ function updateBanner(stats) {
   }
 }
 
+// Classifies the CURRENT dominant attack shape from the macro/micro signal
+// mix of recent suspicious traffic -- a simple, transparent heuristic over
+// the two real signals Layer 2 computes (not a trained classifier), but it
+// gives a live "what kind of attack is this" read exactly like feature-
+// attribution panels in real fraud/SOC tooling.
+function updateAttackSignature(events) {
+  const badge = document.getElementById('signature-badge');
+  const suspicious = events.filter(e => !e.blocked && e.trace && e.trace.layer2 && !e.trace.layer2.skipped && (e.tier === 'elevated' || e.tier === 'critical'));
+  if (suspicious.length < 6) { badge.style.display = 'none'; return; }
+
+  const sample = suspicious.slice(0, 30);
+  const avgMacro = sample.reduce((s, e) => s + e.trace.layer2.macro_feature_distortion, 0) / sample.length;
+  const avgMicro = sample.reduce((s, e) => s + e.trace.layer2.micro_coverage_density, 0) / sample.length;
+
+  let label;
+  if (avgMacro > 55 && avgMicro < 35) label = 'PATTERN: RANDOM PROBING';
+  else if (avgMacro < 50 && avgMicro > 50) label = 'PATTERN: IN-DISTRIBUTION SWEEP';
+  else if (avgMacro > 45 && avgMicro > 45) label = 'PATTERN: BOUNDARY MAPPING';
+  else label = 'PATTERN: LOW-CONFIDENCE ANOMALY';
+
+  badge.textContent = `${label} (macro ${avgMacro.toFixed(0)} · micro ${avgMicro.toFixed(0)})`;
+  badge.style.display = 'inline-block';
+}
+
+// ---------------- Cross-client correlation (Sybil cluster) panel ----------------
+// Groups recent suspicious events by client_id. Many DISTINCT identities
+// each showing up only a few times, all suspicious at once, is exactly the
+// Sybil pattern Layer 2's pooled (cross-client) reservoir is designed to
+// catch -- this panel makes that pooling visible instead of implicit.
+function updateClusterPanel(events) {
+  const note = document.getElementById('cluster-note');
+  const list = document.getElementById('cluster-list');
+  const suspicious = events.filter(e => !e.blocked && (e.tier === 'elevated' || e.tier === 'critical'));
+
+  if (suspicious.length === 0) {
+    note.className = 'cluster-note';
+    note.textContent = 'Monitoring for coordinated (Sybil-style) patterns across identities…';
+    list.innerHTML = '';
+    return;
+  }
+
+  const byClient = {};
+  suspicious.forEach(e => {
+    if (!byClient[e.client_id]) byClient[e.client_id] = { count: 0, threatSum: 0 };
+    byClient[e.client_id].count += 1;
+    byClient[e.client_id].threatSum += e.threat_index || 0;
+  });
+  const clients = Object.entries(byClient).map(([id, v]) => ({ id, count: v.count, avg: v.threatSum / v.count }));
+  clients.sort((a, b) => b.avg - a.avg);
+
+  const distinctClients = clients.length;
+  const avgPerClient = suspicious.length / distinctClients;
+
+  if (distinctClients >= 5 && avgPerClient <= 4) {
+    note.className = 'cluster-note hot';
+    note.textContent = `⚠ ${distinctClients} distinct identities showing correlated suspicious behavior, ${avgPerClient.toFixed(1)} requests each on average -- consistent with a Sybil attack splitting traffic across fake accounts.`;
+  } else {
+    note.className = 'cluster-note';
+    note.textContent = `${distinctClients} distinct identities with suspicious traffic so far.`;
+  }
+
+  const maxAvg = Math.max(...clients.map(c => c.avg), 1);
+  list.innerHTML = clients.slice(0, 8).map(c => {
+    const color = c.avg > TIER_ELEVATED_MAX ? TIER_COLORS.critical : TIER_COLORS.elevated;
+    return `
+      <div class="cluster-row">
+        <span class="cluster-client">${c.id}</span>
+        <span class="cluster-count">×${c.count}</span>
+        <span class="cluster-avg" style="color:${color}">${c.avg.toFixed(0)}</span>
+        <div class="cluster-bar-track"><div class="cluster-bar-fill" style="width:${(c.avg / maxAvg) * 100}%; background:${color}"></div></div>
+      </div>`;
+  }).join('');
+}
+
 // ---------------- Trace inspector ----------------
 function signalSummary(event) {
   if (event.blocked) return 'rejected before scoring';
@@ -138,6 +245,25 @@ function signalSummary(event) {
   return '';
 }
 
+// Plain-English "why" sentence for the expanded panel's header -- the
+// research on explainable SOC tooling is consistent that analysts want a
+// one-line human summary before the raw numbers, not instead of them.
+function reasoningSentence(event) {
+  if (event.blocked) return 'Rejected before any scoring: this client exceeded its request-rate budget.';
+  const t = event.trace || {};
+  if (t.layer2 && t.layer2.skipped) return 'Defense is currently disabled, so this request bypassed all scoring and was answered in full.';
+  if (!t.layer2) return '';
+  const macro = t.layer2.macro_feature_distortion, micro = t.layer2.micro_coverage_density;
+  const reasons = [];
+  if (macro > 55) reasons.push(`sits far from the training manifold (macro ${macro})`);
+  if (micro > 55) reasons.push(`is redundant with recent queries across other clients (micro ${micro})`);
+  if (reasons.length === 0) reasons.push('looked statistically ordinary');
+  let sentence = `This query ${reasons.join(' and ')}.`;
+  if (t.layer3 && t.layer3.tier !== 'normal') sentence += ` Routed to the ${t.layer3.tier} tier: ${t.layer3.degradation}.`;
+  if (t.layer4 && t.layer4.triggered) sentence += ` A watermark was planted (label ${t.layer4.original_label} → ${t.layer4.final_label}) for later ownership proof.`;
+  return sentence;
+}
+
 function wfBar(value, color) {
   return `<div class="wf-bar"><div class="wf-bar-fill" style="width:${Math.min(100, value)}%; background:${color}"></div></div>`;
 }
@@ -146,14 +272,12 @@ function renderWaterfall(event) {
   const t = event.trace || {};
   const rows = [];
 
-  // Layer 1
   if (event.blocked) {
     rows.push(`<div class="wf-stage"><div class="wf-stage-name">L1 · Ingress</div><div class="wf-stage-body"><span class="wf-fail">✗ BLOCKED</span> — rate limit exceeded for this client</div></div>`);
   } else {
     rows.push(`<div class="wf-stage"><div class="wf-stage-name">L1 · Ingress</div><div class="wf-stage-body"><span class="wf-pass">✓ allowed</span> <span class="dim">within rate limit</span></div></div>`);
   }
 
-  // Layer 2
   if (t.layer2 && t.layer2.skipped) {
     rows.push(`<div class="wf-stage"><div class="wf-stage-name">L2 · Detection</div><div class="wf-stage-body dim">skipped — ${t.layer2.reason}</div></div>`);
   } else if (t.layer2) {
@@ -163,13 +287,11 @@ function renderWaterfall(event) {
     </div></div>`);
   }
 
-  // Layer 3
   if (t.layer3) {
     const extra = t.layer3.boundary_perturbed ? ' <span style="color:#a78bfa">· boundary-adjacent label flip applied</span>' : '';
     rows.push(`<div class="wf-stage"><div class="wf-stage-name">L3 · Response</div><div class="wf-stage-body">tier <strong>${t.layer3.tier}</strong> — ${t.layer3.degradation}${extra}</div></div>`);
   }
 
-  // Layer 4
   if (t.layer4) {
     if (t.layer4.triggered) {
       rows.push(`<div class="wf-stage"><div class="wf-stage-name">L4 · Watermark</div><div class="wf-stage-body"><span style="color:#a78bfa">⭐ triggered</span> — label flipped ${t.layer4.original_label} → ${t.layer4.final_label}</div></div>`);
@@ -180,51 +302,88 @@ function renderWaterfall(event) {
     }
   }
 
-  return `<div class="trace-waterfall">${rows.join('')}</div>`;
+  const reasoning = reasoningSentence(event);
+  return `${reasoning ? `<div class="trace-reason">${reasoning}</div><div style="height:8px"></div>` : ''}<div class="trace-waterfall">${rows.join('')}</div>`;
 }
 
 function verdictBadge(event) {
   if (event.blocked) return `<span class="verdict-badge verdict-blocked">BLOCKED</span>`;
-  const cls = `verdict-${event.tier}`;
-  return `<span class="verdict-badge ${cls}">${event.tier.toUpperCase()}</span>`;
+  return `<span class="verdict-badge verdict-${event.tier}">${event.tier.toUpperCase()}</span>`;
 }
 
-function renderTraceList() {
-  const list = document.getElementById('trace-list');
-  const filtered = currentFilter === 'all' ? allEvents : allEvents.filter(e => currentFilter === 'blocked' ? e.blocked : e.tier === currentFilter);
+function matchesFilter(event) {
+  if (currentFilter === 'all') return true;
+  if (currentFilter === 'blocked') return event.blocked;
+  return event.tier === currentFilter;
+}
 
-  if (filtered.length === 0) {
-    list.innerHTML = `<div class="trace-placeholder">No ${currentFilter === 'all' ? '' : currentFilter + ' '}requests yet…</div>`;
-    return;
+function buildRowElement(event) {
+  const key = String(event.timestamp);
+  const time = new Date(event.timestamp * 1000).toLocaleTimeString();
+  const wm = event.watermarked ? '<span class="wm-badge">⭐</span>' : '';
+
+  const row = document.createElement('div');
+  row.className = 'trace-row';
+  row.dataset.key = key;
+  row.dataset.tier = event.blocked ? 'blocked' : event.tier;
+  row.style.display = matchesFilter(event) ? '' : 'none';
+
+  row.innerHTML = `
+    <div class="trace-row-main">
+      <span class="trace-time">${time}</span>
+      <span class="trace-client">${event.client_id}</span>
+      <span>${verdictBadge(event)}${wm}</span>
+      <span class="trace-threat">${event.threat_index !== null ? event.threat_index.toFixed(0) : '—'}</span>
+      <span class="trace-signal">${signalSummary(event)}</span>
+      <span class="trace-caret">▶</span>
+    </div>
+    <div class="trace-detail"></div>`;
+
+  row.querySelector('.trace-row-main').addEventListener('click', () => {
+    const expanded = row.classList.toggle('expanded');
+    const detail = row.querySelector('.trace-detail');
+    if (expanded && !detail.dataset.built) {
+      detail.innerHTML = renderWaterfall(event);
+      detail.dataset.built = '1';
+    }
+  });
+
+  return row;
+}
+
+// Only NEW events get a DOM node created (and therefore only they play the
+// "just arrived" animation) -- previously the entire list was rebuilt via
+// innerHTML on every single poll, which replayed the fade-in animation on
+// EVERY row, EVERY second, forever. That was the "log keeps blinking" bug.
+function updateTraceList(events) {
+  const list = document.getElementById('trace-list');
+  const placeholder = list.querySelector('.trace-placeholder');
+  const newEvents = events.filter(e => !renderedKeys.has(String(e.timestamp)));
+
+  if (newEvents.length > 0) {
+    if (placeholder) placeholder.remove();
+    // events arrive most-recent-first; insert oldest-of-the-new-batch first
+    // so the final DOM order still has the newest event at the very top.
+    for (let i = newEvents.length - 1; i >= 0; i--) {
+      const event = newEvents[i];
+      renderedKeys.add(String(event.timestamp));
+      list.insertBefore(buildRowElement(event), list.firstChild);
+    }
+    while (list.children.length > MAX_TRACE_ROWS) {
+      const last = list.lastElementChild;
+      renderedKeys.delete(last.dataset.key);
+      list.removeChild(last);
+    }
   }
 
-  const scrollTop = list.scrollTop;
-  list.innerHTML = filtered.slice(0, 80).map(event => {
-    const key = String(event.timestamp);
-    const isExpanded = expandedRows.has(key);
-    const time = new Date(event.timestamp * 1000).toLocaleTimeString();
-    const wm = event.watermarked ? '<span class="wm-badge">⭐</span>' : '';
-    return `
-      <div class="trace-row ${isExpanded ? 'expanded' : ''}" data-key="${key}">
-        <div class="trace-row-main">
-          <span class="trace-time">${time}</span>
-          <span class="trace-client">${event.client_id}</span>
-          <span>${verdictBadge(event)}${wm}</span>
-          <span class="trace-threat">${event.threat_index !== null ? event.threat_index.toFixed(0) : '—'}</span>
-          <span class="trace-signal">${signalSummary(event)}</span>
-          <span class="trace-caret">▶</span>
-        </div>
-        <div class="trace-detail">${isExpanded ? renderWaterfall(event) : ''}</div>
-      </div>`;
-  }).join('');
-  list.scrollTop = scrollTop;
+  if (list.children.length === 0) {
+    list.innerHTML = `<div class="trace-placeholder">No requests yet…</div>`;
+  }
+}
 
-  list.querySelectorAll('.trace-row').forEach(row => {
-    row.querySelector('.trace-row-main').addEventListener('click', () => {
-      const key = row.dataset.key;
-      if (expandedRows.has(key)) expandedRows.delete(key); else expandedRows.add(key);
-      renderTraceList();
-    });
+function applyFilterToDom() {
+  document.querySelectorAll('.trace-row').forEach(row => {
+    row.style.display = (currentFilter === 'all' || row.dataset.tier === currentFilter) ? '' : 'none';
   });
 }
 
@@ -233,7 +392,7 @@ document.getElementById('trace-filters').addEventListener('click', (e) => {
   document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
   e.target.classList.add('active');
   currentFilter = e.target.dataset.filter;
-  renderTraceList();
+  applyFilterToDom();
 });
 
 // ---------------- Flash + status ----------------
@@ -241,6 +400,7 @@ function maybeFlash(criticalCount) {
   if (criticalCount > lastCriticalCount) {
     const overlay = document.getElementById('flash-overlay');
     overlay.classList.remove('flash'); void overlay.offsetWidth; overlay.classList.add('flash');
+    playAlertTone();
   }
   lastCriticalCount = criticalCount;
 }
@@ -272,6 +432,14 @@ function render(stats) {
   setStat('kpi-watermarks', stats.watermark_triggers);
   setStat('kpi-suspicious', suspiciousPct + '%');
 
+  requestHistory.push(stats.total_requests);
+  if (requestHistory.length > 30) requestHistory.shift();
+  drawSparkline('spark-requests', requestHistory, '#5b8def');
+
+  suspiciousHistory.push(suspiciousPct);
+  if (suspiciousHistory.length > 30) suspiciousHistory.shift();
+  drawSparkline('spark-suspicious', suspiciousHistory, '#fbbf24');
+
   const recent = stats.recent_threat_indices || [];
   updateGauge(recent.length ? recent[recent.length - 1] : 0);
 
@@ -285,8 +453,10 @@ function render(stats) {
 
   updateBanner(stats);
 
-  allEvents = stats.recent_events || [];
-  renderTraceList();
+  const events = stats.recent_events || [];
+  updateAttackSignature(events);
+  updateClusterPanel(events);
+  updateTraceList(events);
 
   maybeFlash(counts.critical || 0);
 
