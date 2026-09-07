@@ -42,3 +42,18 @@ both false-positive lockouts and threshold leakage), and plants a
 deterministic, hidden watermark into degraded responses so that if a stolen
 surrogate does surface, ownership can be proven with a statistical confidence
 score -- not just asserted.
+
+## The concrete target: a real fraud model
+
+To make this a genuine test rather than a toy demo, ModelVault protects a
+model trained on the real Kaggle/ULB Credit Card Fraud Detection dataset --
+284,807 actual anonymized transactions, 492 confirmed frauds (0.17%
+prevalence). This is a deliberately high-stakes, realistic target: a
+production fraud model takes years of labeled transaction history and
+adversarial feedback to build well, and a cloned surrogate handed to a fraud
+ring would let them systematically probe for exactly which transaction
+patterns currently evade detection -- a direct, quantifiable financial harm,
+not an abstract one. It's also a genuinely hard classification problem
+(severe class imbalance, 29 real-valued features), which matters for the
+attack simulation: a defense that only "works" on an easy, balanced synthetic
+task proves much less than one that holds up here.

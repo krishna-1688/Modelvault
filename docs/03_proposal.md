@@ -27,14 +27,12 @@ escalating ways: detect, degrade, and (after the fact) prove theft.
 ## What we measured
 
 Using `attack_sim/evaluate.py` against three attack types (random-query,
-in-distribution, and boundary-search), across an undefended baseline vs. the
-full ModelVault gateway:
-
-| Attack | Undefended agreement | Defended agreement |
-|---|---|---|
-| random_query | ~95% | ~80% |
-| in_distribution | ~97% | ~71% |
-| boundary | ~94% | ~57% |
+in-distribution, and boundary-search), against a real RandomForest fraud
+classifier trained on the Kaggle/ULB Credit Card Fraud dataset (284,807
+transactions, 0.17% fraud), comparing an undefended baseline to the full
+ModelVault gateway -- see `docs/06_benchmark.md` for the exact numbers and
+full methodology (evaluated on a class-balanced set, since raw accuracy is
+meaningless at this class imbalance).
 
 The in-distribution result matters most: it's the attack an earlier,
 simpler prototype (single flat watermark rate, no reservoir, no
@@ -48,7 +46,9 @@ needed after the fact.
 
 ## Scope and constraints
 
-Everything here runs locally with free, open-source tooling (FastAPI,
-scikit-learn, Streamlit) and a synthetic dataset, so the whole system is
-reproducible offline with no external dependencies. See `05_tradeoffs.md`
-for what was deliberately left out of this build and why.
+The gateway itself runs locally with free, open-source tooling (FastAPI,
+scikit-learn, Streamlit, Docker). The target model is trained on real,
+publicly available data (fetched once, cached locally, with a synthetic
+fallback for offline/CI use), so the whole system is reproducible without
+paid infrastructure. See `05_tradeoffs.md` for what was deliberately left
+out of this build and why.

@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
 
+env:
+  # CI runs against the synthetic data fallback -- fast and network-independent.
+  # The real 284k-row fraud dataset is fetched/cached on demand for local dev
+  # and demo runs; see modelvault/model/data_prep.py.
+  MODELVAULT_FORCE_SYNTHETIC_DATA: "1"
+
 jobs:
   lint-and-smoke-test:
     runs-on: ubuntu-latest
@@ -23,7 +29,7 @@ jobs:
           python -c "import modelvault.model.train"
           python -c "import attack_sim.evaluate"
 
-      - name: Train target model
+      - name: Train target model (synthetic fallback data)
         run: python -m modelvault.model.train
 
       - name: Run tests

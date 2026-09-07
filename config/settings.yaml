@@ -16,5 +16,7 @@ watermark:
   secret_salt_env_var: SECRET_SALT   # actual secret lives in .env, this just names the var
 
 model:
-  n_features: 10
+  n_features: 29         # V1-V28 + Amount, from the real credit card fraud dataset.
+                          # Only used by the synthetic fallback in data_prep.py
+                          # when the real dataset can't be loaded or fetched.
   random_state: 42

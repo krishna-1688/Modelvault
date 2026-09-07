@@ -13,6 +13,22 @@ ModelVault sits in front of an existing model API and:
 
 Built for Problem Statement 16 (Adversarial ML / AI IP Protection).
 
+## The target model being protected
+
+ModelVault is demonstrated in front of a **real fraud-detection model**, trained on the
+[Kaggle/ULB Credit Card Fraud Detection dataset](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud)
+(284,807 real anonymized transactions, 492 confirmed frauds — a 0.17% positive rate; fetched via
+OpenML, `data_id=1597`, and cached locally). This is the industry-standard benchmark for
+fraud/anomaly detection work, chosen deliberately over synthetic data: a production fraud model is
+genuinely expensive to build (years of labeled transaction history, adversarial feedback loops,
+compliance review), and a stolen surrogate handed to a fraud ring would let them probe for exactly
+which transaction patterns evade detection — a real, high-stakes IP theft scenario, not a toy one.
+
+The target classifier is a `RandomForestClassifier` (150 trees, `class_weight="balanced_subsample"`),
+evaluated with precision/recall/F1/ROC-AUC/PR-AUC rather than plain accuracy — at 0.17% fraud
+prevalence, a model that always predicts "not fraud" scores >99.8% accuracy while being useless, so
+accuracy alone is not a meaningful metric here. See `docs/06_benchmark.md` for the full numbers.
+
 ## Why this problem is real
 
 - Training a serious ML model costs $1.2M–$200M+ depending on scale. Cloning its behavior via API
@@ -64,6 +80,27 @@ Layer 4 -- Dynamic Watermark + Verify         deterministic per (client_id, quer
 - **The watermark decision is deterministic** (`HMAC(secret, client_id + query)`), so a client
   can't detect the defense by sending the same query twice and comparing answers.
 
+## Production hardening
+
+Beyond the four detection/response layers, the gateway includes the things a real deployment
+would need and a demo could otherwise skip:
+
+- **Input validation**: feature-count and finiteness checks (NaN/Infinity rejected) at the API
+  boundary, before any model or detection code runs — including a fix for a real bug found during
+  hardening, where a malformed request containing a literal `NaN` crashed FastAPI's own
+  error-response serializer (see `modelvault/gateway/api.py`'s `_sanitize_non_finite`).
+- **Thread safety**: the rate limiter, the cross-client query reservoir, and the shared stats
+  counters are all lock-protected — FastAPI runs sync endpoints in a threadpool, so concurrent
+  requests genuinely race on this state without it.
+- **Admin authentication**: `/admin/*` and `/verify-ownership` require an `X-API-Key` header
+  matching `ADMIN_API_KEY` when it's configured (see `modelvault/gateway/auth.py`).
+- **Liveness vs. readiness**: `/health` (process is up) is distinct from `/ready` (model, scaler,
+  and reference density are actually loaded) — the distinction a real orchestrator needs to gate
+  traffic correctly.
+- **A saved preprocessing pipeline**: the `StandardScaler` fit during training is saved and
+  reloaded at serving time (`artifacts/target/scaler.joblib`), applied once at the gateway boundary
+  so every downstream layer operates on a consistent feature space.
+
 ## Configuration
 
 **Secrets and ports go in `.env`; every tunable threshold goes in `config/settings.yaml`. Never
@@ -75,12 +112,21 @@ duplicate a value in both.**
 python -m venv .venv
 source .venv/Scripts/activate   # or .venv\Scripts\activate on Windows cmd
 pip install -r requirements.txt
-cp .env.example .env            # then fill in SECRET_SALT
+cp .env.example .env            # then fill in SECRET_SALT and ADMIN_API_KEY
 
-python -m modelvault.model.train        # trains target model + reference density
+python -m modelvault.model.train        # trains target model + reference density (fetches the
+                                         # real dataset once, then caches it locally)
 bash scripts/run_gateway.sh             # starts the FastAPI gateway
 bash scripts/run_dashboard.sh           # starts the Streamlit dashboard (separate terminal)
 python -m attack_sim.evaluate           # undefended vs. defended comparison
+```
+
+### Running with Docker
+
+```bash
+cp .env.example .env   # fill in SECRET_SALT and ADMIN_API_KEY
+docker compose run --rm gateway python -m modelvault.model.train   # one-time: trains artifacts
+docker compose up                                                  # starts gateway + dashboard
 ```
 
 ## Project layout
@@ -92,7 +138,7 @@ See `docs/02_architecture.md` for the full breakdown. Core packages:
 - `modelvault/layer2_detection/` -- threat index (macro + micro signals)
 - `modelvault/layer3_response/` -- graduated response degradation
 - `modelvault/layer4_watermark/` -- watermark injection + ownership verification
-- `modelvault/gateway/` -- FastAPI app wiring it all together
+- `modelvault/gateway/` -- FastAPI app wiring it all together (auth, validation, thread-safe state)
 - `attack_sim/` -- extraction attack simulations used to measure defense effectiveness
 - `dashboard/` -- Streamlit live monitoring UI
 

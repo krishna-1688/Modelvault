@@ -8,62 +8,70 @@ boundary is designed to corrupt exactly this kind of query pattern.
 
 This uses the TARGET model's raw predictions to steer the binary search
 (as a real attacker would use whatever label the API returns) and then
-records the AT-boundary queries as the attack's collected dataset.
+records the AT-boundary queries as the attack's collected dataset. Candidate
+seed points are drawn from real raw rows of the training data (not the
+gateway's internal scaled reference density) so the generated queries match
+the API's raw-features contract.
+
+Two things matter for performance at real-world scale, and both mirror what
+an actual attacker would also have to do:
+
+  - Candidates are drawn stratified by PREDICTED label, not uniformly at
+    random. At 0.17% fraud prevalence, two uniformly random rows would
+    almost never disagree on predicted class -- a naive attacker doing pure
+    random pairing would need tens of thousands of draws per boundary point.
+  - The binary search runs on ALL boundary points simultaneously (one
+    batched model call per step) rather than one point at a time. A real
+    attacker querying a remote API can't usefully parallelize like this
+    (each query is a network round trip), but they WOULD batch multiple
+    independent binary searches into concurrent requests -- the model call
+    count is the same either way, only the wall-clock shape differs. We
+    batch here because we're calling the model in-process; it does not
+    change how many queries the "attacker" makes, which is what the
+    detection layers actually see and react to.
 """
 from __future__ import annotations
 
 import numpy as np
 
-from modelvault.model.predict import load_reference_model
+from modelvault.model.data_prep import generate_dataset
 
 
-def _binary_search_to_boundary(
-    predict_fn,
-    point_a: np.ndarray,
-    point_b: np.ndarray,
-    label_a: int,
-    steps: int = 8,
-) -> np.ndarray:
-    """point_a and point_b must have different predicted labels under predict_fn."""
-    low, high = point_a.copy(), point_b.copy()
+def generate_queries(n: int, predict_fn, seed: int | None = None, jitter_scale: float = 0.02, steps: int = 8) -> np.ndarray:
+    """predict_fn: callable(raw_features_batch) -> array of predicted labels,
+    one per row. Must accept RAW (unscaled) features -- the same contract
+    /predict exposes over HTTP -- and must be batch-capable (shape
+    (n_samples, n_features) in, shape (n_samples,) out)."""
+    X_train, _, _, _ = generate_dataset()
+    rng = np.random.default_rng(seed)
+    column_scale = np.std(X_train, axis=0)
+
+    all_labels = np.asarray(predict_fn(X_train))
+    label_buckets = {label: np.where(all_labels == label)[0] for label in np.unique(all_labels)}
+
+    if len(label_buckets) < 2:
+        # Degenerate case: the model predicts only one class across all of
+        # X_train. Nothing to binary-search toward -- fall back to plain sampling.
+        idx = rng.integers(0, len(X_train), size=n)
+        return X_train[idx]
+
+    labels = list(label_buckets.keys())
+    label_a_choices = rng.choice(labels, size=n)
+    # label_b must differ from label_a on each row; with only 2 labels this
+    # is just "the other one", generalizes to >2 classes via rejection.
+    label_b_choices = np.array([rng.choice([l for l in labels if l != la]) for la in label_a_choices])
+
+    a_points = np.vstack([X_train[rng.choice(label_buckets[la])] for la in label_a_choices])
+    b_points = np.vstack([X_train[rng.choice(label_buckets[lb])] for lb in label_b_choices])
+
+    low, high = a_points.copy(), b_points.copy()
     for _ in range(steps):
         mid = (low + high) / 2.0
-        mid_label = predict_fn(mid)
-        if mid_label == label_a:
-            low = mid
-        else:
-            high = mid
-    return (low + high) / 2.0
+        mid_labels = np.asarray(predict_fn(mid))
+        matches_a = mid_labels == label_a_choices
+        low[matches_a] = mid[matches_a]
+        high[~matches_a] = mid[~matches_a]
 
-
-def generate_queries(n: int, predict_fn, seed: int | None = None, jitter_scale: float = 0.05) -> np.ndarray:
-    """predict_fn: callable(features) -> single predicted label, used to steer
-    the boundary search exactly as an attacker would use the API's own label."""
-    reference = load_reference_model()
-    rng = np.random.default_rng(seed)
-
-    boundary_points: list[np.ndarray] = []
-    attempts = 0
-    while len(boundary_points) < n and attempts < n * 20:
-        attempts += 1
-        candidates, _ = reference.sample(2)
-        a, b = candidates[0], candidates[1]
-        label_a, label_b = predict_fn(a), predict_fn(b)
-        if label_a == label_b:
-            continue
-        boundary_point = _binary_search_to_boundary(predict_fn, a, b, label_a)
-        # Query densely around the found boundary point, not just the point itself.
-        boundary_points.append(boundary_point + rng.normal(scale=jitter_scale, size=boundary_point.shape))
-
-    if not boundary_points:
-        # Degenerate fallback if the model never disagreed across sampled pairs.
-        samples, _ = reference.sample(n)
-        return samples
-
-    result = np.vstack(boundary_points)
-    if len(result) < n:
-        # Pad by resampling near existing boundary points if we hit the attempt cap.
-        extra_idx = rng.integers(0, len(result), size=n - len(result))
-        extra = result[extra_idx] + rng.normal(scale=jitter_scale, size=(n - len(result), result.shape[1]))
-        result = np.vstack([result, extra])
-    return result[:n]
+    boundary_points = (low + high) / 2.0
+    jitter = rng.normal(scale=jitter_scale, size=boundary_points.shape) * column_scale
+    return boundary_points + jitter

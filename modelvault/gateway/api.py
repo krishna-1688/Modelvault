@@ -5,20 +5,33 @@
   Layer 3 (throttling)        -> degrade the response based on the tier
   Layer 4 (watermark)         -> possibly flip the label, log the event
 
-Also exposes /verify-ownership (statistical proof of theft) and
-/admin/stats + /admin/toggle-defense for the dashboard and demo script.
+Raw features are scaled once at the boundary (transform_features) and every
+downstream layer -- reservoir storage, threat scoring, model inference,
+watermark hashing -- operates on that same scaled representation, matching
+what the artifacts were fit on in train.py.
+
+Also exposes /verify-ownership (statistical proof of theft), /ready (startup
+health), and /admin/stats + /admin/toggle-defense for the dashboard and demo
+script. Admin routes and /verify-ownership require an X-API-Key header when
+ADMIN_API_KEY is configured -- see gateway/auth.py.
 """
 from __future__ import annotations
 
+import math
 import time
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
+from modelvault.gateway.auth import require_admin_key
 from modelvault.gateway.schemas import (
     AdminStatsResponse,
     PredictRequest,
     PredictResponse,
+    ReadyResponse,
     ToggleDefenseRequest,
     VerifyOwnershipRequest,
     VerifyOwnershipResponse,
@@ -29,29 +42,80 @@ from modelvault.layer3_response.boundary_perturbation import apply_boundary_pert
 from modelvault.layer3_response.throttling import ResponseTier, apply_throttling, classify_tier
 from modelvault.layer4_watermark.verification import WatermarkEvent, verify_ownership
 from modelvault.layer4_watermark.watermark import decide_and_apply_watermark
-from modelvault.model.predict import load_target_model, predict_proba
+from modelvault.model.predict import load_reference_model, load_scaler, load_target_model, predict_proba, transform_features
 from modelvault.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-app = FastAPI(title="ModelVault Gateway", version="0.1.0")
+app = FastAPI(title="ModelVault Gateway", version="1.0.0")
+
+
+def _sanitize_non_finite(value):
+    """Starlette's JSONResponse refuses to encode NaN/Infinity (correctly,
+    per the JSON spec) -- but FastAPI's default validation-error response
+    echoes the REJECTED input value back in the error detail, so a client
+    sending literal NaN (which Python's own json.loads accepts as a
+    non-standard extension on parse) would otherwise crash this handler with
+    an unhandled 500 while trying to report that the input was invalid.
+    Replacing non-finite floats with their string form before encoding keeps
+    the error response itself always serializable."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {k: _sanitize_non_finite(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_non_finite(v) for v in value]
+    return value
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    sanitized = _sanitize_non_finite(jsonable_encoder(exc.errors()))
+    return JSONResponse(status_code=422, content={"detail": sanitized})
 
 
 @app.get("/health")
 def health():
+    """Liveness: is the process up. Does not check model artifacts -- see /ready for that."""
     return {"status": "ok"}
+
+
+@app.get("/ready", response_model=ReadyResponse)
+def ready():
+    """Readiness: are the trained artifacts actually loadable. A real
+    orchestrator (k8s, etc.) should gate traffic on this, not /health --
+    a process can be alive with no model loaded."""
+    try:
+        load_target_model()
+        load_reference_model()
+        load_scaler()
+    except Exception as exc:
+        return ReadyResponse(ready=False, detail=f"Artifacts not loadable: {exc}")
+    return ReadyResponse(ready=True, detail="Model, reference density, and scaler all loaded.")
+
+
+def _validate_feature_count(features: list[float]) -> None:
+    expected = load_target_model().n_features_in_
+    if len(features) != expected:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Expected {expected} features, got {len(features)}.",
+        )
 
 
 @app.post("/predict", response_model=PredictResponse)
 def predict(request: PredictRequest):
     state = get_state()
-    features = np.asarray(request.features, dtype=float)
+    _validate_feature_count(request.features)
 
-    # Layer 1 -- ingress velocity governor.
+    # Layer 1 -- ingress velocity governor. Checked before any scaling/model
+    # work so a rate-limited caller doesn't burn compute on rejected requests.
     if not state.velocity_governor.allow(request.client_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    if not state.defense_enabled:
+    features = transform_features(np.asarray(request.features, dtype=float))[0]
+
+    if not state.is_defense_enabled():
         probabilities = predict_proba(features)[0]
         label = int(np.argmax(probabilities))
         return PredictResponse(
@@ -88,7 +152,7 @@ def predict(request: PredictRequest):
         response["label"] = watermark_decision.final_label
         state.record_watermark_event(request.client_id, features, watermark_decision.final_label)
 
-    state.record_request(request.client_id, tier, threat_index)
+    state.record_request(request.client_id, tier, threat_index, label=response["label"], watermarked=watermarked)
 
     return PredictResponse(
         tier=tier.value,
@@ -99,7 +163,7 @@ def predict(request: PredictRequest):
     )
 
 
-@app.post("/verify-ownership", response_model=VerifyOwnershipResponse)
+@app.post("/verify-ownership", response_model=VerifyOwnershipResponse, dependencies=[Depends(require_admin_key)])
 def verify_ownership_endpoint(request: VerifyOwnershipRequest):
     state = get_state()
     if not (len(request.queries) == len(request.suspect_labels) == len(request.client_ids)):
@@ -135,13 +199,13 @@ def verify_ownership_endpoint(request: VerifyOwnershipRequest):
     )
 
 
-@app.get("/admin/stats", response_model=AdminStatsResponse)
+@app.get("/admin/stats", response_model=AdminStatsResponse, dependencies=[Depends(require_admin_key)])
 def admin_stats():
     return get_state().stats()
 
 
-@app.post("/admin/toggle-defense")
+@app.post("/admin/toggle-defense", dependencies=[Depends(require_admin_key)])
 def admin_toggle_defense(request: ToggleDefenseRequest):
     state = get_state()
-    state.defense_enabled = request.enabled
-    return {"defense_enabled": state.defense_enabled}
+    state.set_defense_enabled(request.enabled)
+    return {"defense_enabled": state.is_defense_enabled()}

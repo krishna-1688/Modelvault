@@ -1,0 +1,29 @@
+services:
+  gateway:
+    build: .
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./data/raw:/app/data/raw
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dashboard:
+    build: .
+    command: ["streamlit", "run", "dashboard/app.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    ports:
+      - "${DASHBOARD_PORT:-8501}:8501"
+    env_file:
+      - .env
+    environment:
+      - GATEWAY_HOST=gateway
+      - GATEWAY_PORT=8000
+    depends_on:
+      gateway:
+        condition: service_healthy

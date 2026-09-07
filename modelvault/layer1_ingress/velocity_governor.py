@@ -6,8 +6,9 @@ Layer 2's job, not this one's.
 """
 from __future__ import annotations
 
+import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from modelvault.utils.config_loader import get_settings
 
@@ -25,6 +26,10 @@ class VelocityGovernor:
         self.window_seconds = window_seconds if window_seconds is not None else settings.rate_limit.window_seconds
         self.refill_rate = self.capacity / self.window_seconds  # tokens per second
         self._buckets: dict[str, _Bucket] = {}
+        # FastAPI runs sync `def` endpoints in a threadpool, so concurrent
+        # requests can race on the same client's bucket without this --
+        # a token-bucket read-modify-write is not atomic on its own.
+        self._lock = threading.Lock()
 
     def _get_bucket(self, client_id: str, now: float) -> _Bucket:
         bucket = self._buckets.get(client_id)
@@ -36,16 +41,18 @@ class VelocityGovernor:
     def allow(self, client_id: str, now: float | None = None) -> bool:
         """Returns True if the request is allowed, consuming one token. Never raises."""
         now = now if now is not None else time.monotonic()
-        bucket = self._get_bucket(client_id, now)
+        with self._lock:
+            bucket = self._get_bucket(client_id, now)
 
-        elapsed = max(0.0, now - bucket.last_refill)
-        bucket.tokens = min(self.capacity, bucket.tokens + elapsed * self.refill_rate)
-        bucket.last_refill = now
+            elapsed = max(0.0, now - bucket.last_refill)
+            bucket.tokens = min(self.capacity, bucket.tokens + elapsed * self.refill_rate)
+            bucket.last_refill = now
 
-        if bucket.tokens >= 1.0:
-            bucket.tokens -= 1.0
-            return True
-        return False
+            if bucket.tokens >= 1.0:
+                bucket.tokens -= 1.0
+                return True
+            return False
 
     def reset(self, client_id: str) -> None:
-        self._buckets.pop(client_id, None)
+        with self._lock:
+            self._buckets.pop(client_id, None)

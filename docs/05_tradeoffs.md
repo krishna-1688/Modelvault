@@ -13,17 +13,20 @@
   detection mechanism at hackathon scope, and is far cheaper to fit and
   reason about.
 - **Full FDINet over real deep-network internal activations.** Our target
-  model is a `LogisticRegression` classifier over engineered features, not a
-  deep network with internal activations to instrument -- the
-  density-over-features simplification is the intended scope here, not a
-  shortfall.
+  model is a `RandomForestClassifier` over engineered features, not a deep
+  network with internal activations to instrument -- the density-over-features
+  simplification is the intended scope here, not a shortfall.
 - **A persistent (e.g. SQLite) telemetry layer.** `gateway/state.py` already
   owns all client state in memory. Adding a database would duplicate that
   responsibility for no benefit at this scale, and state doesn't need to
   survive a restart for a demo.
-- **Automated external dataset fetching as the default data path.** Demo day
-  has no internet guarantee. `sklearn.make_classification` is fully synthetic,
-  deterministic, and requires no network access.
+- **The real dataset as the ONLY data path.** Demo day has no internet
+  guarantee, so the real dataset is fetched once and cached locally
+  (`data/raw/creditcard.csv`, gitignored -- 142MB, too large to commit), with
+  a synthetic fallback (`modelvault/model/data_prep.py`) if neither the cache
+  nor a network fetch is available. `MODELVAULT_FORCE_SYNTHETIC_DATA=1`
+  forces the fallback explicitly -- used in CI so the pipeline stays fast and
+  network-independent rather than re-downloading 150MB on every run.
 
 ## Known limitations
 
@@ -43,6 +46,21 @@
   boundary walk, not a full HopSkipJump implementation -- sufficient to
   exercise `boundary_perturbation.py`, but not a state-of-the-art attack
   implementation in its own right.
+- **"Surrogate agreement with target" is a weaker signal for the boundary
+  attack specifically than for the other two.** By construction, its
+  training queries sit exactly on the decision boundary -- the region where
+  even the true model's own predictions are least stable and a KNN
+  surrogate's local smoothness assumption is most violated. That makes
+  raw accuracy noisier run-to-run for this attack than for random_query or
+  in_distribution. The literature typically evaluates boundary/HopSkipJump-
+  style attacks on boundary-reconstruction fidelity or adversarial-example
+  transferability, not held-out accuracy -- a more faithful metric we didn't
+  implement here. What's unambiguous regardless is the ownership-verification
+  result: boundary-attack traffic reliably lands a high fraction of queries
+  in the critical tier, generates many watermark triggers, and produces a
+  high-confidence `verified=True` result -- which is arguably the more
+  important claim for this attack type anyway (can we prove theft?), even
+  when the accuracy-degradation number is noisier.
 
 ## Why these trade-offs are acceptable here
 
