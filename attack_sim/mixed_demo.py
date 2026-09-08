@@ -21,7 +21,6 @@ Usage (gateway already running):
 from __future__ import annotations
 
 import argparse
-import itertools
 import os
 import threading
 import time
@@ -45,6 +44,9 @@ GATEWAY_URL = os.environ.get("GATEWAY_URL") or f"http://{GATEWAY_HOST}:{GATEWAY_
 N_SYBIL_CLIENTS = 25
 RUN_ID = uuid.uuid4().hex[:6]
 
+_weights = np.array(legit_client.CONSUMER_WEIGHTS, dtype=float)
+_normalized_weights = _weights / _weights.sum()
+
 _stop = threading.Event()
 _counters = {"legit_sent": 0, "legit_blocked": 0, "attack_sent": 0, "attack_blocked": 0}
 _counter_lock = threading.Lock()
@@ -64,15 +66,16 @@ def _post(session: requests.Session, client_id: str, features: np.ndarray, demo_
 
 
 def legitimate_worker(rate_per_second: float) -> None:
-    """Steady, modest, repetitive traffic from a few named consumers."""
+    """Steady, modest traffic from a realistic customer roster -- a few large
+    integrations dominating volume, a longer tail of smaller ones, matching
+    legit_client.CONSUMER_WEIGHTS rather than equal round-robin."""
     profiles = legit_client.build_consumer_profiles(seed=7)
     rng = np.random.default_rng(11)
     session = requests.Session()
-    consumers = itertools.cycle(legit_client.CONSUMER_IDS)
     interval = 1.0 / rate_per_second
 
     while not _stop.is_set():
-        consumer = next(consumers)
+        consumer = rng.choice(legit_client.CONSUMER_IDS, p=_normalized_weights)
         features = legit_client.next_query(profiles, consumer, rng)
         status = _post(session, consumer, features, "legitimate")
         with _counter_lock:
@@ -112,7 +115,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run mixed legitimate + attacker traffic against the gateway.")
     parser.add_argument("--duration", type=int, default=60, help="Seconds to run.")
     parser.add_argument("--attack", choices=["random_query", "in_distribution", "boundary"], default="in_distribution")
-    parser.add_argument("--legit-rate", type=float, default=6.0, help="Legitimate requests per second.")
+    parser.add_argument("--legit-rate", type=float, default=10.0, help="Legitimate requests per second, split across the weighted consumer roster.")
     parser.add_argument("--attack-rate", type=float, default=14.0, help="Attacker requests per second.")
     parser.add_argument("--legit-only", action="store_true", help="Baseline mode: no attacker traffic.")
     parser.add_argument("--attack-delay", type=int, default=8, help="Seconds of clean traffic before the attack starts.")
@@ -125,7 +128,8 @@ def main() -> None:
         return
 
     print(f"Target: {GATEWAY_URL}")
-    print(f"Legitimate consumers: {', '.join(legit_client.CONSUMER_IDS)} @ {args.legit_rate}/s")
+    print(f"Legitimate consumers: {len(legit_client.CONSUMER_IDS)} named accounts "
+          f"({legit_client.CONSUMER_IDS[0]} biggest, {legit_client.CONSUMER_IDS[-1]} smallest) @ {args.legit_rate}/s total")
     if args.legit_only:
         print("Attacker: none (baseline mode -- shows normal traffic is served untouched)")
     else:

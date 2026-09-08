@@ -131,9 +131,17 @@ class GatewayState:
                     "demo_label": v.get("demo_label"),
                     "full_fidelity_rate": (v["total"] - v["degraded"]) / v["total"] if v["total"] else 0.0,
                 })
-            consumers.sort(key=lambda c: c["total"], reverse=True)
+            # A pure top-N-by-volume cut can crowd every real customer off
+            # the table once enough sybil identities exist -- there are
+            # typically far more attacker identities than real customers,
+            # not fewer. Every consumer explicitly labelled "legitimate"
+            # (via the demo header) is always kept; remaining slots go to
+            # the highest-volume of everyone else.
+            legit = sorted((c for c in consumers if c["demo_label"] == "legitimate"), key=lambda c: c["total"], reverse=True)
+            other = sorted((c for c in consumers if c["demo_label"] != "legitimate"), key=lambda c: c["total"], reverse=True)
+            remaining_slots = max(0, 20 - len(legit))
             return {
-                "consumers": consumers[:12],
+                "consumers": legit + other[:remaining_slots],
                 "demo_truth": {k: dict(v) for k, v in self.demo_truth.items()},
             }
 

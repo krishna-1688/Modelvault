@@ -27,15 +27,39 @@ import numpy as np
 
 from modelvault.model.data_prep import generate_dataset
 
-# A few stable, named consumers, as a real deployment would have.
-CONSUMER_IDS = [
-    "acme-payments-prod",
-    "northwind-checkout",
-    "globex-risk-api",
-    "initech-billing",
+# A realistic customer roster: a couple of large integrations, most mid-
+# sized, one or two smaller -- not N identical accounts sending equal
+# traffic, but also not skewed so hard that the smallest ones barely appear.
+#
+# The weight RANGE matters for a mechanical reason, not just realism: this
+# demo shares ONE reservoir window (Layer 2 pools across all clients by
+# design -- that's what defeats Sybil evasion). A consumer whose own repeat
+# visits are rare relative to total traffic can have its earlier occurrence
+# pushed out of the window before it repeats, making its own normal,
+# repetitive behaviour look novel. A ~3x spread keeps every consumer's
+# repeat rate high enough to be recognised reliably; an 11x spread (tried
+# first) let the smallest consumer's full-fidelity rate collapse to ~33%
+# purely from being statistically rare, not from looking suspicious.
+# (client_id, relative traffic weight)
+CONSUMERS = [
+    ("acme-payments-prod", 14),
+    ("northwind-checkout", 13),
+    ("globex-risk-api", 12),
+    ("stripe-like-gateway", 11),
+    ("initech-billing", 10),
+    ("umbrella-insurance-claims", 9),
+    ("wayne-ecommerce", 8),
+    ("hooli-subscriptions", 7),
+    ("soylent-lending", 6),
+    ("wonka-rideshare", 6),
+    ("aperture-travel-booking", 5),
+    ("massive-dynamic-marketplace", 5),
 ]
+CONSUMER_IDS = [c for c, _ in CONSUMERS]
+CONSUMER_WEIGHTS = [w for _, w in CONSUMERS]
 
-PROFILE_POOL_SIZE = 10   # each consumer sees a small, recurring set of customer profiles
+PROFILE_POOL_SIZE = 6   # fewer recurring profiles = each one repeats sooner, which is what
+                        # the redundancy signal needs to reliably recognise real customers
 
 
 def build_consumer_profiles(seed: int | None = None) -> dict[str, np.ndarray]:
