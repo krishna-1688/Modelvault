@@ -1,7 +1,17 @@
 """Sends REAL HTTP traffic to a running gateway (unlike evaluate.py, which
 uses FastAPI's in-process TestClient and therefore never touches whatever
 server is actually running in another terminal). Use this specifically to
-watch the Streamlit dashboard react live during a demo.
+watch the console react live during a demo -- e.g. from a second machine,
+pointed at the gateway's Cloudflare tunnel URL via GATEWAY_URL.
+
+Every request carries X-Demo-Label: attacker, the same instrumentation
+attack_sim/mixed_demo.py uses for its attacker worker. This is read ONLY by
+the console's Service Integrity panel to report a measured false-positive/
+recall/precision rate -- detection itself never sees it. Without this header
+this traffic still gets caught (or not) exactly the same way; it just
+wouldn't be credited as "attacker" in that one panel, which is why this
+script and mixed_demo.py must both set it to keep those numbers meaningful
+regardless of which script generated the traffic.
 
 Usage (with the gateway already running via `uvicorn modelvault.gateway.api:app`):
     python -m attack_sim.live_demo --attack in_distribution --n 300 --delay 0.03
@@ -63,6 +73,7 @@ def run_live_attack(attack: str, n: int, delay: float) -> None:
             response = session.post(
                 f"{GATEWAY_URL}/predict",
                 json={"client_id": client_id, "features": query.tolist()},
+                headers={"X-Demo-Label": "attacker"},
                 timeout=5,
             )
         except requests.RequestException as exc:
