@@ -142,6 +142,10 @@ def predict(request: PredictRequest, http_request: Request):
     state = get_state()
     _validate_feature_count(request.features)
     source_ip = http_request.client.host if http_request.client else "unknown"
+    # DEMO-ONLY ground-truth tag (see attack_sim/mixed_demo.py). Recorded for
+    # scoring the defense's false-positive rate on the console; deliberately
+    # never passed to any detection layer -- Layer 2 stays content-based.
+    demo_label = http_request.headers.get("X-Demo-Label")
 
     # Layer 1 -- ingress velocity governor. Checked before any scaling/model
     # work so a rate-limited caller doesn't burn compute on rejected requests.
@@ -150,6 +154,7 @@ def predict(request: PredictRequest, http_request: Request):
     if not state.velocity_governor.allow(request.client_id):
         state.record_blocked_request(request.client_id)
         state.record_origin(source_ip, request.client_id, suspicious=True)
+        state.record_service_quality(request.client_id, "blocked", degraded=True, blocked=True, demo_label=demo_label)
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     features = transform_features(np.asarray(request.features, dtype=float))[0]
@@ -169,6 +174,7 @@ def predict(request: PredictRequest, http_request: Request):
         }
         state.record_request(request.client_id, ResponseTier.NORMAL, 0.0, label=label, watermarked=False, trace=trace)
         state.record_origin(source_ip, request.client_id, suspicious=False)
+        state.record_service_quality(request.client_id, "normal", degraded=False, blocked=False, demo_label=demo_label)
         # With defense off the attacker receives the true label, so their
         # clone learns unimpeded -- exactly the contrast the fidelity meter
         # is there to make visible.
@@ -258,6 +264,10 @@ def predict(request: PredictRequest, http_request: Request):
         label=response["label"], watermarked=watermarked, trace=trace,
     )
     state.record_origin(source_ip, request.client_id, suspicious=tier != ResponseTier.NORMAL)
+    state.record_service_quality(
+        request.client_id, tier.value,
+        degraded=tier != ResponseTier.NORMAL, blocked=False, demo_label=demo_label,
+    )
     # original_label here is the target model's true argmax BEFORE boundary
     # perturbation or watermarking -- so the pair (disclosed, true) captures
     # exactly what the defense withheld or corrupted on this request.
@@ -313,6 +323,49 @@ def verify_ownership_endpoint(request: VerifyOwnershipRequest):
 @app.get("/admin/stats", response_model=AdminStatsResponse, dependencies=[Depends(require_admin_key)])
 def admin_stats():
     return get_state().stats()
+
+
+@app.get("/admin/service-integrity", dependencies=[Depends(require_admin_key)])
+def admin_service_integrity():
+    """Is the defense doing its job WITHOUT taxing legitimate consumers?
+
+    A gateway that catches every attacker by degrading everyone has no
+    commercial value, so this reports both halves: per-consumer service
+    quality, and -- when demo ground-truth labels are present -- the
+    measured false-positive rate, recall, and precision of the detector.
+
+    Those labels come from the X-Demo-Label header set by
+    attack_sim/mixed_demo.py and are used for SCORING ONLY. Detection itself
+    never sees them; Layer 2 classifies on query content alone."""
+    summary = get_state().service_quality_summary()
+    truth = summary["demo_truth"]
+
+    legit, attacker = truth["legitimate"], truth["attacker"]
+    metrics = None
+    if legit["total"] or attacker["total"]:
+        false_positives = legit["degraded"]
+        true_positives = attacker["degraded"]
+        false_negatives = attacker["total"] - attacker["degraded"]
+
+        fp_rate = (false_positives / legit["total"]) if legit["total"] else None
+        recall = (true_positives / attacker["total"]) if attacker["total"] else None
+        precision = (
+            true_positives / (true_positives + false_positives)
+            if (true_positives + false_positives) else None
+        )
+        metrics = {
+            "legitimate_requests": legit["total"],
+            "legitimate_degraded": false_positives,
+            "legitimate_full_fidelity_rate": (1 - fp_rate) if fp_rate is not None else None,
+            "attacker_requests": attacker["total"],
+            "attacker_degraded": true_positives,
+            "false_positive_rate": fp_rate,
+            "recall": recall,
+            "precision": precision,
+            "false_negatives": false_negatives,
+        }
+
+    return {"consumers": summary["consumers"], "metrics": metrics}
 
 
 @app.get("/admin/clone-fidelity", dependencies=[Depends(require_admin_key)])

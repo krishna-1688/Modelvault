@@ -75,6 +75,22 @@ def _surrogate_agreement(X: np.ndarray, y: np.ndarray, X_eval: np.ndarray, targe
     return float(np.mean(model.predict(X_eval) == target_labels))
 
 
+def information_withheld_rate(samples: list[dict]) -> float | None:
+    """Fraction of answered queries where the disclosed label differed from
+    the model's true answer.
+
+    A deliberately simple, always-meaningful companion to the surrogate
+    estimate. Clone fidelity is the more interesting number but it is not
+    always scorable -- against a boundary-probing attacker the queries are
+    ambiguous by construction, and against data-free probing the model
+    answers every query with the same class. This one is a direct count and
+    is well-defined in every case."""
+    if not samples:
+        return None
+    corrupted = sum(1 for s in samples if s["disclosed_label"] != s["true_label"])
+    return corrupted / len(samples)
+
+
 def compute_clone_fidelity(samples: list[dict]) -> dict:
     """Returns the defended vs. undefended reconstruction estimate. Cached
     for CACHE_TTL_SECONDS -- callers can poll this every second safely."""
@@ -109,18 +125,35 @@ def compute_clone_fidelity(samples: list[dict]) -> dict:
             X_train, X_eval = X[train_idx], X[test_idx]
             target_labels = true[test_idx]
 
-            defended = _surrogate_agreement(X_train, disclosed[train_idx], X_eval, target_labels)
-            undefended = _surrogate_agreement(X_train, true[train_idx], X_eval, target_labels)
-            prevented = undefended - defended
-
-            result = {
-                "ready": True,
-                "samples": len(samples),
-                "min_samples": MIN_SAMPLES,
-                "defended_fidelity": defended,
-                "undefended_fidelity": undefended,
-                "prevented_points": prevented,
-            }
+            # If the target model answered every one of these queries with the
+            # same class, agreement is trivially 100% for any constant
+            # classifier and the comparison carries no information. Common
+            # for data-free probing: random noise almost always scores as
+            # 'not fraud'. Report that honestly instead of showing a
+            # meaningless 0-points-prevented.
+            if len(np.unique(target_labels)) < 2:
+                result = {
+                    "ready": False,
+                    "degenerate": True,
+                    "reason": "target model returned a single class for every sampled query -- reconstruction cannot be scored",
+                    "samples": len(samples),
+                    "min_samples": MIN_SAMPLES,
+                    "defended_fidelity": None,
+                    "undefended_fidelity": None,
+                    "prevented_points": None,
+                }
+            else:
+                defended = _surrogate_agreement(X_train, disclosed[train_idx], X_eval, target_labels)
+                undefended = _surrogate_agreement(X_train, true[train_idx], X_eval, target_labels)
+                result = {
+                    "ready": True,
+                    "degenerate": False,
+                    "samples": len(samples),
+                    "min_samples": MIN_SAMPLES,
+                    "defended_fidelity": defended,
+                    "undefended_fidelity": undefended,
+                    "prevented_points": undefended - defended,
+                }
         except Exception as exc:
             logger.warning("Clone fidelity estimation failed: %s", exc)
             result = {
@@ -131,6 +164,8 @@ def compute_clone_fidelity(samples: list[dict]) -> dict:
                 "undefended_fidelity": None,
                 "prevented_points": None,
             }
+
+    result["information_withheld_rate"] = information_withheld_rate(samples)
 
     with _lock:
         _cache = result

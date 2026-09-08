@@ -552,12 +552,21 @@ async function updateTheftMeter() {
     const waiting = document.getElementById('theft-waiting');
     const live = document.getElementById('theft-live');
 
+    const withheld = f.information_withheld_rate !== null && f.information_withheld_rate !== undefined
+      ? (f.information_withheld_rate * 100) : null;
+    const withheldLine = withheld !== null
+      ? `<div class="theft-withheld">🛡 <strong>${withheld.toFixed(0)}%</strong> of answers to suspicious traffic were degraded or corrupted before leaving the gateway</div>`
+      : '';
+
     if (!f.ready) {
       waiting.style.display = '';
       live.style.display = 'none';
-      document.getElementById('theft-needed').textContent = f.min_samples;
-      document.getElementById('theft-progress-fill').style.width =
-        Math.min(100, (f.samples / f.min_samples) * 100) + '%';
+      if (f.degenerate) {
+        waiting.innerHTML = `<div class="theft-degenerate">Reconstruction score not applicable here — ${f.reason}.</div>${withheldLine}`;
+      } else {
+        waiting.innerHTML = `Estimating… need <span id="theft-needed">${f.min_samples}</span> answered queries to fit a surrogate.
+          <div class="theft-progress"><div class="theft-progress-fill" style="width:${Math.min(100, (f.samples / f.min_samples) * 100)}%"></div></div>${withheldLine}`;
+      }
       return;
     }
 
@@ -578,14 +587,73 @@ async function updateTheftMeter() {
     document.getElementById('theft-val-undefended').textContent = undefended.toFixed(0) + '%';
 
     const prev = document.getElementById('theft-prevented');
+    prev.style.display = '';
+    const withheldSuffix = withheld !== null
+      ? ` · ${withheld.toFixed(0)}% of answers degraded before release` : '';
     if (prevented > 0.5) {
-      prev.style.display = '';
-      prev.textContent = `✓ ${prevented.toFixed(0)} percentage points of model theft prevented — from ${f.samples} answered queries`;
+      prev.innerHTML = `✓ <strong>${prevented.toFixed(0)} percentage points</strong> of model theft prevented across ${f.samples} answered queries${withheldSuffix}`;
     } else {
-      prev.style.display = '';
-      prev.textContent = `Monitoring — ${f.samples} answered queries analysed`;
+      prev.innerHTML = `Monitoring ${f.samples} answered queries${withheldSuffix}`;
     }
   } catch (e) { /* leave last known state on screen */ }
+}
+
+// ---------------- Service integrity ----------------
+// The commercial claim this product lives or dies on: attackers contained
+// WITHOUT taxing paying customers. Shown as measured numbers, using the
+// demo ground-truth labels (scoring only -- never fed to detection).
+async function updateServiceIntegrity() {
+  try {
+    const res = await fetch('/admin/service-integrity', { headers: { 'X-API-Key': API_KEY } });
+    if (!res.ok) return;
+    const data = await res.json();
+    const m = data.metrics;
+
+    const empty = document.getElementById('integrity-empty');
+    const live = document.getElementById('integrity-live');
+
+    if (!m || !m.legitimate_requests) {
+      empty.style.display = '';
+      live.style.display = 'none';
+    } else {
+      empty.style.display = 'none';
+      live.style.display = '';
+
+      const fidelity = (m.legitimate_full_fidelity_rate ?? 0) * 100;
+      const big = document.getElementById('int-fidelity');
+      big.textContent = fidelity.toFixed(1) + '%';
+      big.style.color = fidelity >= 90 ? TIER_COLORS.normal : fidelity >= 75 ? TIER_COLORS.elevated : TIER_COLORS.critical;
+
+      document.getElementById('int-fp').textContent = m.false_positive_rate !== null ? (m.false_positive_rate * 100).toFixed(1) + '%' : '—';
+      document.getElementById('int-recall').textContent = m.recall !== null ? (m.recall * 100).toFixed(0) + '%' : '—';
+      document.getElementById('int-precision').textContent = m.precision !== null ? (m.precision * 100).toFixed(0) + '%' : '—';
+    }
+
+    renderConsumers(data.consumers || []);
+  } catch (e) { /* keep last known state */ }
+}
+
+function renderConsumers(consumers) {
+  const list = document.getElementById('consumers-list');
+  if (consumers.length === 0) {
+    list.innerHTML = '<div class="consumers-empty">No consumers seen yet.</div>';
+    return;
+  }
+  list.innerHTML = consumers.map(c => {
+    const pct = c.full_fidelity_rate * 100;
+    const healthy = pct >= 70;
+    const color = healthy ? TIER_COLORS.normal : TIER_COLORS.critical;
+    const verdict = healthy ? 'FULL SERVICE' : 'THROTTLED';
+    return `
+      <div class="consumer-card ${healthy ? 'good' : 'bad'}">
+        <div class="consumer-head">
+          <span class="consumer-id">${c.client_id}</span>
+          <span class="consumer-verdict ${healthy ? 'good' : 'bad'}">${verdict}</span>
+        </div>
+        <div class="consumer-bar"><div class="consumer-bar-fill" style="width:${pct}%; background:${color}"></div></div>
+        <div class="consumer-meta">${c.total} req · ${pct.toFixed(0)}% full fidelity${c.demo_label ? ' · ' + c.demo_label : ''}</div>
+      </div>`;
+  }).join('');
 }
 
 // ---------------- Ownership evidence ----------------
@@ -704,6 +772,7 @@ document.getElementById('defense-toggle').addEventListener('change', async (e) =
 function pollHeavy() {
   updateTheftMeter();
   updateOwnershipEvidence();
+  updateServiceIntegrity();
 }
 
 loadReferenceZone();

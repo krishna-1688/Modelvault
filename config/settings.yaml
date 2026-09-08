@@ -1,5 +1,5 @@
 reservoir:
-  window_size: 100
+  window_size: 400
 
 threat_index:
   tier_normal_max: 35        # 0-35   -> full response

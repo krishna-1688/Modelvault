@@ -105,13 +105,33 @@
       </div>
     </div>
 
-    <div class="panel adversary-panel">
-      <div class="panel-title">ADVERSARY ORIGINS</div>
-      <div class="adversary-list" id="adversary-list">
-        <div class="adversary-empty">No traffic sources seen yet.</div>
+    <div class="panel integrity-panel">
+      <div class="panel-title">SERVICE INTEGRITY — ARE REAL CUSTOMERS UNAFFECTED?</div>
+      <div class="integrity-body" id="integrity-body">
+        <div class="integrity-empty" id="integrity-empty">Awaiting labelled traffic…</div>
+        <div class="integrity-live" id="integrity-live" style="display:none">
+          <div class="integrity-headline">
+            <div class="integrity-big" id="int-fidelity">—</div>
+            <div class="integrity-cap">of <strong>legitimate customer</strong> traffic served at full fidelity</div>
+          </div>
+          <div class="integrity-metrics">
+            <div class="int-metric"><span class="int-val" id="int-fp">—</span><span class="int-lbl">false positive rate</span></div>
+            <div class="int-metric"><span class="int-val" id="int-recall">—</span><span class="int-lbl">attacks caught</span></div>
+            <div class="int-metric"><span class="int-val" id="int-precision">—</span><span class="int-lbl">precision</span></div>
+          </div>
+          <div class="integrity-note">Ground-truth labels are demo instrumentation only — never used for detection.</div>
+        </div>
       </div>
     </div>
 
+  </section>
+
+  <!-- ============ CONSUMER SERVICE TABLE ============ -->
+  <section class="panel consumers-panel">
+    <div class="panel-title">PER-CONSUMER SERVICE QUALITY — WHO IS BEING THROTTLED, WHO ISN'T</div>
+    <div class="consumers-list" id="consumers-list">
+      <div class="consumers-empty">No consumers seen yet.</div>
+    </div>
   </section>
 
   <!-- ============ STAT STRIP ============ -->
@@ -191,6 +211,12 @@
       <div class="panel-title">CROSS-CLIENT CORRELATION</div>
       <div class="cluster-note" id="cluster-note">Monitoring for coordinated (Sybil-style) patterns across identities…</div>
       <div class="cluster-list" id="cluster-list"></div>
+    </div>
+    <div class="panel adversary-panel">
+      <div class="panel-title">ADVERSARY ORIGINS</div>
+      <div class="adversary-list" id="adversary-list">
+        <div class="adversary-empty">No traffic sources seen yet.</div>
+      </div>
     </div>
   </section>
 

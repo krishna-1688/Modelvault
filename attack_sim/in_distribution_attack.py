@@ -22,14 +22,25 @@ from modelvault.model.data_prep import generate_dataset
 
 
 def generate_queries(n: int, seed: int | None = None) -> np.ndarray:
+    """Distinct real transactions, sampled WITHOUT replacement -- an attacker
+    maximizing information per query has no reason to ask the same thing
+    twice. That non-repetition is the whole signature: individually every
+    query is a genuine transaction (so the macro signal correctly stays
+    quiet), but collectively they sweep the space far more broadly than any
+    real consumer's traffic does, which is what the micro signal reads.
+
+    Deliberately almost no synthetic jitter, for the same reason as
+    legit_client: independent noise across 29 dimensions pushes points off
+    the manifold and would let the macro signal separate the populations for
+    the wrong reason -- flattering the defense with a simulator artifact.
+    """
     X_train, _, _, _ = generate_dataset()
     rng = np.random.default_rng(seed)
 
-    idx = rng.integers(0, len(X_train), size=n)
+    take = min(n, len(X_train))
+    idx = rng.choice(len(X_train), size=take, replace=False)
     base = X_train[idx]
-
-    # Small relative jitter per-column so the attacker isn't replaying exact
-    # rows verbatim, while staying on-manifold.
-    column_scale = np.std(X_train, axis=0, keepdims=True)
-    jitter = rng.normal(scale=0.02, size=base.shape) * column_scale
-    return base + jitter
+    if take < n:  # only if someone asks for more queries than rows available
+        extra = X_train[rng.integers(0, len(X_train), size=n - take)]
+        base = np.vstack([base, extra])
+    return base * (1.0 + rng.normal(scale=0.002, size=base.shape))

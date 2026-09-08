@@ -65,6 +65,21 @@ class GatewayState:
         self.first_degraded_at: float | None = None
         self.first_watermark_at: float | None = None
 
+        # Per-consumer service quality: how each caller is actually being
+        # treated. A defense that catches attackers by degrading everyone is
+        # worthless, so "are paying customers still getting full fidelity"
+        # is a first-class metric, not an afterthought.
+        self.consumer_quality: dict[str, dict] = {}
+
+        # DEMO-ONLY ground truth from the X-Demo-Label header. Recorded so the
+        # console can display a genuinely MEASURED false-positive rate rather
+        # than asserting one. Never read by any detection layer -- detection
+        # stays purely content-based, which is the entire point of Layer 2.
+        self.demo_truth = {
+            "legitimate": {"total": 0, "degraded": 0, "blocked": 0},
+            "attacker": {"total": 0, "degraded": 0, "blocked": 0},
+        }
+
         # velocity_governor and reservoir lock themselves internally; this
         # lock covers the counters/sets/dict above, which FastAPI's
         # threadpool-executed sync endpoints can otherwise mutate concurrently.
@@ -77,6 +92,50 @@ class GatewayState:
     def set_defense_enabled(self, enabled: bool) -> None:
         with self._lock:
             self.defense_enabled = enabled
+
+    def record_service_quality(self, client_id: str, tier: str, degraded: bool, blocked: bool, demo_label: str | None) -> None:
+        """Tracks how each caller is actually being served, plus (when the
+        demo header is present) the ground truth needed to measure the
+        false-positive rate. demo_label NEVER influences detection."""
+        with self._lock:
+            entry = self.consumer_quality.get(client_id)
+            if entry is None:
+                entry = {"total": 0, "degraded": 0, "blocked": 0, "tier_counts": {}, "demo_label": demo_label}
+                self.consumer_quality[client_id] = entry
+            entry["total"] += 1
+            entry["tier_counts"][tier] = entry["tier_counts"].get(tier, 0) + 1
+            if degraded:
+                entry["degraded"] += 1
+            if blocked:
+                entry["blocked"] += 1
+            if demo_label and entry.get("demo_label") is None:
+                entry["demo_label"] = demo_label
+
+            if demo_label in self.demo_truth:
+                bucket = self.demo_truth[demo_label]
+                bucket["total"] += 1
+                if degraded:
+                    bucket["degraded"] += 1
+                if blocked:
+                    bucket["blocked"] += 1
+
+    def service_quality_summary(self) -> dict:
+        with self._lock:
+            consumers = []
+            for client_id, v in self.consumer_quality.items():
+                consumers.append({
+                    "client_id": client_id,
+                    "total": v["total"],
+                    "degraded": v["degraded"],
+                    "blocked": v["blocked"],
+                    "demo_label": v.get("demo_label"),
+                    "full_fidelity_rate": (v["total"] - v["degraded"]) / v["total"] if v["total"] else 0.0,
+                })
+            consumers.sort(key=lambda c: c["total"], reverse=True)
+            return {
+                "consumers": consumers[:12],
+                "demo_truth": {k: dict(v) for k, v in self.demo_truth.items()},
+            }
 
     def record_origin(self, source_ip: str, client_id: str, suspicious: bool) -> None:
         """Tracks the network origin behind a client_id. Sybil identities are
